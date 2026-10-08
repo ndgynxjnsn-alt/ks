@@ -49,7 +49,7 @@ mimir_chart() {
 install() { # release chart-args...
   local rel=$1; shift
   echo ">>> $rel"
-  helm upgrade --install "$rel" "$@" -n lgtm --create-namespace --wait --timeout 15m
+  helm upgrade --install "$rel" "$@" -n lgtm --create-namespace --wait --timeout 15m 2>&1 | grep -v "symbolic link"
 }
 
 install loki      loki      --repo "$GRAFANA_COMMUNITY" --version "$LOKI_CHART"      -f "$(values loki)"

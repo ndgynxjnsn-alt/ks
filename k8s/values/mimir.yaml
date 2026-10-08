@@ -37,11 +37,26 @@ mimir:
       kafka: { address: null, topic: null, auto_create_topic_default_partitions: null }
     distributor:
       remote_timeout: null
+    # Schedulers are found through the memberlist ring instead of headless-service DNS, so a scheduler on a
+    # dead node drops out after its heartbeat times out (DNS keeps listing not-ready pods -> slow queries).
+    query_scheduler:
+      service_discovery_mode: ring
+    frontend:
+      scheduler_address: ""
+    frontend_worker:
+      scheduler_address: ""
     ingester:
       push_grpc_method_enabled: null
       ring:
         replication_factor: 3
         tokens_file_path: /data/ingester-tokens # chart default /data/ingester/ does not exist in monolithic mode
+        # Mark a dead instance unhealthy within a minute (chart default 10m), so queries skip it.
+        heartbeat_period: 15s
+        heartbeat_timeout: 1m
+    store_gateway:
+      sharding_ring:
+        heartbeat_period: 15s
+        heartbeat_timeout: 1m
     common:
       storage:
         backend: s3

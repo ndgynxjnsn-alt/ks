@@ -122,7 +122,7 @@ Stop any one VM with `vagrant halt lgtm2` (or `virsh destroy`). This is what kee
 
 | Layer | Why it survives one node loss |
 |---|---|
-| Kubernetes API | etcd quorum 2/3; kube-vip moves the VIP to a surviving server within ~5 s |
+| Kubernetes API | etcd quorum 2/3; kube-vip moves the VIP to a surviving server (measured 9–52 s: etcd must re-elect before the kube-vip lease can move) |
 | Ingress | Traefik runs on every node via hostPort, and the VIP follows a live node |
 | S3 | Garage stores 3 copies and serves reads and writes with 2 of 3 nodes |
 | Loki / Mimir | 3 replicas, replication factor 3, quorum writes and reads on 2 of 3 |
