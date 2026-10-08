@@ -17,7 +17,7 @@ done
 
 if [ "$($G layout show | grep -c 'dc1')" -lt 3 ]; then
   for ip in $ALL_NODE_IPS; do
-    $G layout assign -z dc1 -c 400M -t "garage-${ip##*.}" "$(node_id "$ip")"
+    $G layout assign "$(node_id "$ip")" -z dc1 -c 400M -t "garage-${ip##*.}"
   done
   $G layout apply --version 1
 fi
