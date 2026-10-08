@@ -31,6 +31,7 @@ overrides_exporter: { enabled: false }
 
 mimir:
   structuredConfig:
+    multitenancy_enabled: false   # single tenant ("anonymous"); clients need no X-Scope-OrgID header
     ingest_storage:
       enabled: false
       kafka: { address: null, topic: null, auto_create_topic_default_partitions: null }
@@ -40,6 +41,7 @@ mimir:
       push_grpc_method_enabled: null
       ring:
         replication_factor: 3
+        tokens_file_path: /data/ingester-tokens # chart default /data/ingester/ does not exist in monolithic mode
     common:
       storage:
         backend: s3

@@ -63,6 +63,7 @@
             <jvmFlags>
               <jvmFlag>-javaagent:/otel/opentelemetry-javaagent.jar</jvmFlag>
               <jvmFlag>-Dotel.javaagent.extensions=/otel/pyroscope-otel-javaagent-extension.jar</jvmFlag>
+              <jvmFlag>--enable-native-access=ALL-UNNAMED</jvmFlag> <!-- async-profiler loads a native library -->
             </jvmFlags>
             <ports><port>8080</port></ports>
           </container>
