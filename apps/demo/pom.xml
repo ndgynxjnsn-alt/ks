@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>org.lgtm</groupId>
+  <artifactId>demo</artifactId>
+  <version>1.0.0</version>
+  <name>LGTM demo shop</name>
+
+  <properties>
+    <java.version>25</java.version>
+    <otel.version>2.32.0</otel.version>
+    <image>lgtm/demo:${project.version}</image>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-restclient</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- @WithSpan and the OpenTelemetry API; at runtime the Java agent bridges them into its SDK. -->
+    <dependency>
+      <groupId>io.opentelemetry.instrumentation</groupId>
+      <artifactId>opentelemetry-instrumentation-annotations</artifactId>
+      <version>${otel.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Builds an OCI image tarball without a Docker daemon: mvn package jib:buildTar -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <from><image>eclipse-temurin:25-jre</image></from>
+          <to><image>${image}</image></to>
+          <extraDirectories>
+            <paths>
+              <path><from>target/agents</from><into>/otel</into></path>
+            </paths>
+          </extraDirectories>
+          <container>
+            <mainClass>org.lgtm.demo.DemoApplication</mainClass>
+            <jvmFlags>
+              <jvmFlag>-javaagent:/otel/opentelemetry-javaagent.jar</jvmFlag>
+              <jvmFlag>-Dotel.javaagent.extensions=/otel/pyroscope-otel-javaagent-extension.jar</jvmFlag>
+            </jvmFlags>
+            <ports><port>8080</port></ports>
+          </container>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

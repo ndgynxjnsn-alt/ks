@@ -4,3 +4,4 @@
 kubeconfig
 apps/demo/target/
 *.tar
+*.log

@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: demo
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+demo:
+  inventory-url: http://localhost:8080
+  load:
+    enabled: false
+    target-url: http://localhost:8080

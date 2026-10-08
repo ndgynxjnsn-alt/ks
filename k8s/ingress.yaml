@@ -1,0 +1,97 @@
+# Traefik ingress for every UI/API. Hostnames resolve to the kube-vip VIP (see README: /etc/hosts).
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: grafana.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: grafana, port: { number: 80 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: loki
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: loki.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: loki, port: { number: 3100 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tempo
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: tempo.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: tempo, port: { number: 3200 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mimir
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: mimir.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: mimir-monolithic, port: { number: 8080 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pyroscope
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: pyroscope.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: pyroscope, port: { number: 4040 } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alloy
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: alloy.org
+      http:
+        paths:
+          - path: /v1/
+            pathType: Prefix
+            backend: { service: { name: alloy, port: { number: 4318 } } }
+          - path: /ingest
+            pathType: Prefix
+            backend: { service: { name: alloy, port: { number: 9999 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: alloy, port: { number: 12345 } } }

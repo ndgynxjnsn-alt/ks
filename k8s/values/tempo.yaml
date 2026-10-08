@@ -1,0 +1,54 @@
+# Tempo 3 monolithic. Tempo 3 supports exactly one -target=all instance (singleton backend scheduler),
+# so HA comes from fast rescheduling: no PVC (WAL on emptyDir), traces live in Garage S3.
+fullnameOverride: tempo
+replicas: 1
+
+tempo:
+  reportingEnabled: false
+  retention: 168h
+  storage:
+    trace:
+      backend: s3
+      s3:
+        bucket: tempo-traces
+        endpoint: ${S3_ENDPOINT}
+        region: garage
+        access_key: ${S3_ACCESS_KEY_ID}
+        secret_key: ${S3_SECRET_ACCESS_KEY}
+        insecure: true
+        forcepathstyle: true
+      wal:
+        path: /var/tempo/wal
+  receivers:
+    otlp:
+      protocols:
+        grpc: { endpoint: "0.0.0.0:4317" }
+        http: { endpoint: "0.0.0.0:4318" }
+  # Service graph + span metrics (RED) are written to Mimir.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://mimir-monolithic.lgtm.svc:8080/api/v1/push
+    storage:
+      remote_write:
+        - url: http://mimir-monolithic.lgtm.svc:8080/api/v1/push
+          send_exemplars: true
+  overrides:
+    defaults:
+      metrics_generator:
+        processors: [service-graphs, span-metrics]
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1536Mi }
+  extraVolumeMounts:
+    - { name: data, mountPath: /var/tempo }
+
+extraVolumes:
+  - { name: data, emptyDir: {} }
+
+persistence:
+  enabled: false
+
+# Reschedule quickly when the node running Tempo dies (default would be 5 minutes).
+tolerations:
+  - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+  - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }

@@ -1,0 +1,35 @@
+# Pyroscope v2 single binary (-target=all): 3 replicas form a raft metastore quorum, profiles in Garage S3.
+pyroscope:
+  fullnameOverride: pyroscope
+  replicaCount: 3
+  extraArgs:
+    metastore.raft.bootstrap-expect-peers: 3
+    log.level: info
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels: { app.kubernetes.io/component: all }
+  structuredConfig:
+    storage:
+      backend: s3
+      s3:
+        endpoint: ${S3_ENDPOINT}
+        region: garage
+        bucket_name: pyroscope-data
+        access_key_id: ${S3_ACCESS_KEY_ID}
+        secret_access_key: ${S3_SECRET_ACCESS_KEY}
+        insecure: true
+        force_path_style: true
+    limits:
+      compactor_blocks_retention_period: 7d
+
+# Alloy is deployed separately (k8s/values/alloy.yaml).
+alloy: { enabled: false }

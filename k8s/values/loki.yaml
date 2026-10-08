@@ -1,0 +1,65 @@
+# Loki monolithic: 3 replicas, replication factor 3, chunks + index in Garage S3.
+deploymentMode: Monolithic
+fullnameOverride: loki
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 3
+  schemaConfig:
+    configs:
+      - from: "2026-01-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index: { prefix: index_, period: 24h }
+  storage:
+    type: s3
+    bucketNames:
+      chunks: loki-chunks
+      ruler: loki-ruler
+    s3:
+      endpoint: ${S3_ENDPOINT}
+      region: garage
+      accessKeyId: ${S3_ACCESS_KEY_ID}
+      secretAccessKey: ${S3_SECRET_ACCESS_KEY}
+      s3ForcePathStyle: true
+      insecure: true
+  limits_config:
+    retention_period: 7d
+    allow_structured_metadata: true
+    volume_enabled: true        # Logs Drilldown
+    discover_service_name: [service_name, service, app, application, name, app_kubernetes_io_name, container]
+    otlp_config:
+      resource_attributes:
+        attributes_config:
+          - action: index_label
+            attributes: [service.namespace, deployment.environment.name, k8s.namespace.name]
+  compactor:
+    retention_enabled: true
+    delete_request_store: s3
+  pattern_ingester:
+    enabled: true               # Logs Drilldown patterns
+
+singleBinary:
+  replicas: 3
+  persistence:
+    size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels: { app.kubernetes.io/component: single-binary }
+
+gateway: { enabled: false }
+lokiCanary: { enabled: false }
+test: { enabled: false }
+chunksCache: { enabled: false }
+resultsCache: { enabled: false }
+read: { replicas: 0 }
+write: { replicas: 0 }
+backend: { replicas: 0 }

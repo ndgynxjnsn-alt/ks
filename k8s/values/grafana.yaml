@@ -1,0 +1,87 @@
+# Grafana: stateless (everything provisioned), one replica that reschedules quickly when its node dies.
+fullnameOverride: grafana
+replicas: 1
+adminUser: admin
+adminPassword: ${GRAFANA_ADMIN_PASSWORD}
+
+persistence:
+  enabled: false
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }
+
+tolerations:
+  - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+  - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+
+grafana.ini:
+  server:
+    root_url: http://grafana.org
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  feature_toggles:
+    enable: traceToProfiles tracesEmbeddedFlameGraph
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Mimir
+        uid: mimir
+        type: prometheus
+        url: http://mimir-monolithic.lgtm.svc:8080/prometheus
+        isDefault: true
+        jsonData:
+          prometheusType: Mimir
+          httpMethod: POST
+          exemplarTraceIdDestinations:
+            - { name: trace_id, datasourceUid: tempo }
+
+      - name: Loki
+        uid: loki
+        type: loki
+        url: http://loki.lgtm.svc:3100
+        jsonData:
+          derivedFields:
+            - name: TraceID
+              matcherType: label
+              matcherRegex: trace_id
+              url: "$${__value.raw}"
+              datasourceUid: tempo
+              urlDisplayLabel: View trace
+
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        url: http://tempo.lgtm.svc:3200
+        jsonData:
+          serviceMap: { datasourceUid: mimir }
+          nodeGraph: { enabled: true }
+          search: { hide: false }
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: "-5m"
+            spanEndTimeShift: "5m"
+            filterByTraceID: true
+            tags: [{ key: service.name, value: service_name }]
+          tracesToMetrics:
+            datasourceUid: mimir
+            spanStartTimeShift: "-5m"
+            spanEndTimeShift: "5m"
+            tags: [{ key: service.name, value: service_name }]
+            queries:
+              - name: Request rate
+                query: sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m]))
+              - name: Error rate
+                query: sum(rate(traces_spanmetrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[5m]))
+          tracesToProfiles:
+            datasourceUid: pyroscope
+            profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
+            tags: [{ key: service.name, value: service_name }]
+
+      - name: Pyroscope
+        uid: pyroscope
+        type: grafana-pyroscope-datasource
+        url: http://pyroscope.lgtm.svc:4040
