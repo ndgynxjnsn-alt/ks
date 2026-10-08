@@ -1,0 +1,6 @@
+.vagrant/
+.bin/
+.secrets/
+kubeconfig
+apps/demo/target/
+*.tar

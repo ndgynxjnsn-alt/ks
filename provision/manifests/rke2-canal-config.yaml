@@ -1,0 +1,10 @@
+# Pod network (flannel VXLAN) over the private node network instead of the Vagrant NAT interface.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-canal
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    flannel:
+      iface: "${IFACE}"
