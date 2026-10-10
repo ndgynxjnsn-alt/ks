@@ -124,3 +124,9 @@ alloy:
       loki.write "default" {
         endpoint { url = "http://loki.lgtm.svc:3100/loki/api/v1/push" }
       }
+
+# Plain tag instead of the chart's tag@index-digest: offline nodes only hold the amd64 image, whose
+# digest differs from the multi-arch index digest, so a digest reference would never match locally.
+configReloader:
+  image:
+    tag: v0.94.0

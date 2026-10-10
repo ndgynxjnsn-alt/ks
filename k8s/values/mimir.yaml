@@ -16,6 +16,9 @@ monolithic:
     requests: { cpu: 100m, memory: 512Mi }
     limits: { memory: 1536Mi }
   terminationGracePeriodSeconds: 60
+  extraArgs:
+    # On a fresh install the gossip service has no endpoints yet; don't crash, keep retrying the join.
+    memberlist.abort-if-fast-join-fails: "false"
   topologySpreadConstraints:
     maxSkew: 1
     topologyKey: kubernetes.io/hostname

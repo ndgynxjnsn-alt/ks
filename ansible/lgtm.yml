@@ -29,18 +29,24 @@
         chart: "grafana-{{ charts.grafana.version }}.tgz"
         secrets: { adminPassword: "{{ grafana_admin_password }}" }
   tasks:
+    # helm CLI directly: kubernetes.core.helm 6.x still calls `helm list --all`, which Helm 4 removed.
+    # Secrets are passed on stdin (-f -), so they never land on disk or in the process list.
     - name: Install Helm releases
-      kubernetes.core.helm:
-        name: "{{ item.name }}"
-        chart_ref: "{{ artifacts_dir }}/charts/{{ item.chart }}"
-        release_namespace: lgtm
-        create_namespace: true
-        values_files: ["{{ repo_dir }}/k8s/values/{{ item.name }}.yaml"]
-        values: "{{ item.secrets }}"
-        wait: true
-        wait_timeout: 15m
-        binary_path: "{{ artifacts_dir }}/bin/helm"
-        kubeconfig: "{{ repo_dir }}/kubeconfig"
+      ansible.builtin.command:
+        argv:
+          - "{{ artifacts_dir }}/bin/helm"
+          - upgrade
+          - --install
+          - "{{ item.name }}"
+          - "{{ artifacts_dir }}/charts/{{ item.chart }}"
+          - --kubeconfig={{ repo_dir }}/kubeconfig
+          - --namespace=lgtm
+          - --create-namespace
+          - --values={{ repo_dir }}/k8s/values/{{ item.name }}.yaml
+          - --values=-
+          - --wait
+          - --timeout=15m
+        stdin: "{{ item.secrets | to_nice_yaml }}"
       loop: "{{ releases }}"
       loop_control: { label: "{{ item.name }}" }
 
