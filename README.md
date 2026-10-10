@@ -2,7 +2,14 @@
 
 A highly available, on-premise-style Kubernetes cluster that runs the Grafana LGTM+P stack: Loki, Grafana,
 Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry point. The three servers are
-simulated with Vagrant/libvirt VMs. No cloud services are used.
+simulated with Vagrant/libvirt VMs and set up with Ansible. No cloud services are used.
+
+**The servers are fully offline.** They have no internet access: the libvirt networks are isolated. Everything
+they need is downloaded once onto the Ansible host (`artifacts/`), then installed from there:
+
+* RKE2 installs in tarball mode with its air-gap image bundles.
+* All other container images are pre-loaded into containerd.
+* The Helm charts are deployed from local `.tgz` files.
 
 ```
                          host: /etc/hosts  *.org -> 192.168.56.10 (VIP)
@@ -29,26 +36,30 @@ simulated with Vagrant/libvirt VMs. No cloud services are used.
 | Tempo | 3.1.0 (chart 3.1.0) | monolithic, 1 replica (see below) |
 | Pyroscope | 2.3.2 (chart 2.3.2) | monolithic (v2 storage), 3 replicas, raft metastore |
 | Alloy | 1.20.1 (chart 1.13.1) | DaemonSet |
-| Grafana | 13.2.3 (chart 13.4.0) | 1 replica, stateless, fully provisioned |
+| Grafana | 13.2.3 (chart 13.4.0) | 1 replica, stateless, fully provisioned; image with the Drilldown apps baked in |
 
 ## Prerequisites (host)
 
 * KVM + libvirt + the `vagrant-libvirt` plugin, user in the `libvirt` group:
   `sudo apt install qemu-kvm libvirt-daemon-system libvirt-dev build-essential rsync && vagrant plugin install vagrant-libvirt`
 * About 22 GB of free RAM (3 × 7 GB VMs) and about 30 GB of disk.
-* Java isn't needed for the cluster. The demo app builds with the bundled Maven wrapper and any JDK ≥ 25. No
-  Docker daemon is needed either: the image is built with Jib.
-* `kubectl` and `helm` are downloaded into `.bin/` by `scripts/host-setup.sh`.
+* Ansible ≥ 2.16 with the collections `ansible.posix`, `community.general` and `kubernetes.core`, plus `zstd`, `unzip` and `git`.
+* Internet access on the host, for `download.yml` only.
+* Java isn't needed for the cluster. The demo app builds with the bundled Maven wrapper and any JDK ≥ 25.
+  No Docker daemon is needed: container images are fetched with `crane` and built with Jib/`crane append`.
 
 ## Bring it up
 
 ```bash
-vagrant up                 # ~15 min: VMs, disks, Garage cluster + buckets, RKE2 HA cluster, kube-vip
-scripts/host-setup.sh      # kubectl/helm into .bin/, ./kubeconfig pointing at https://192.168.56.10:6443
-scripts/deploy.sh          # Loki, Mimir, Tempo, Pyroscope, Alloy, Grafana, ingresses
-scripts/demo.sh            # build the demo image, import it on all nodes, deploy it
-source scripts/env.sh      # use kubectl/helm from your shell
+ansible-playbook ansible/download.yml   # host, online: RKE2 tarballs, charts, images, plugins → artifacts/ (~3 GB)
+vagrant up                             # 3 bare VMs on isolated networks
+ansible-playbook ansible/site.yml      # offline: disks, Garage cluster + buckets, RKE2 HA + kube-vip, ./kubeconfig
+ansible-playbook ansible/lgtm.yml      # Loki, Mimir, Tempo, Pyroscope, Alloy, Grafana, ingresses
+ansible-playbook ansible/demo.yml      # build the demo image (host), load it on the nodes, deploy it
+source scripts/env.sh                  # kubectl/helm from artifacts/bin with ./kubeconfig
 ```
+
+All playbooks are idempotent. Re-run `lgtm.yml` after changing anything in `k8s/`.
 
 Point the hostnames at the VIP in `/etc/hosts`:
 
@@ -58,28 +69,49 @@ Point the hostnames at the VIP in `/etc/hosts`:
 
 | URL | What |
 |---|---|
-| http://grafana.org | Grafana (`admin`, password in `.secrets/cluster.env` → `GRAFANA_ADMIN_PASSWORD`) |
+| http://grafana.org | Grafana (`admin`, password in `.secrets/grafana_admin_password`) |
 | http://grafana.org/drilldown | Metrics, Logs, Traces and Profiles Drilldown apps |
 | http://alloy.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/traces`, `/v1/metrics`, `/v1/logs`) and Pyroscope pushes (`/ingest`) from outside the cluster |
 | http://loki.org, http://mimir.org, http://tempo.org, http://pyroscope.org | Backend HTTP APIs (Pyroscope has its own UI) |
 
-All secrets (RKE2 token, Garage keys, Grafana password) are generated on the first `vagrant up` into
-`.secrets/cluster.env`, which git ignores.
+Ansible generates all secrets (RKE2 token, Garage keys, Grafana password) on first use, one file each in
+`.secrets/`. Git ignores that directory.
 
 ## Repository layout
 
 ```
-Vagrantfile                      3 VMs, 5 extra disks each, private network 192.168.56.0/24
-provision/node.sh                disks → Garage → RKE2 server config → RKE2 install
-provision/garage-cluster.sh      Garage layout, access key, buckets (runs once, on the last node)
-provision/manifests/             applied by RKE2 itself: kube-vip, canal interface, local-path storage
-k8s/values/*.yaml                Helm values (credentials are ${placeholders}, filled by deploy.sh)
+Vagrantfile                      3 bare VMs, 5 extra disks each, isolated networks (no internet)
+ansible.cfg
+ansible/inventory.yml            the three nodes (copy for real servers)
+ansible/group_vars/all.yml       versions, VIP, secrets (generated into .secrets/)
+ansible/download.yml             host: fetch everything into artifacts/ (the only online step)
+ansible/site.yml                 nodes: roles garage + rke2, fetch ./kubeconfig
+ansible/roles/garage/            disks → ext4 → Garage systemd service; cluster layout, key, buckets
+ansible/roles/rke2/              tarball install, image preload, config, kube-vip / canal / local-path manifests
+ansible/lgtm.yml                 Helm releases from artifacts/charts + ingresses
+ansible/demo.yml                 build + load + deploy the demo app
+k8s/values/*.yaml                Helm values (S3 credentials and the Grafana password are added by lgtm.yml)
 k8s/ingress.yaml                 Traefik ingresses for *.org
 k8s/demo.yaml                    demo app
 apps/demo/                       Spring Boot 4 demo app
-scripts/                         host-setup.sh, deploy.sh, demo.sh, env.sh
 docs/s3-storage.md               S3 storage research and decision (Garage)
 ```
+
+## Offline installation
+
+`download.yml` fills `artifacts/` (git ignores it). Copy that directory to the Ansible host of an air-gapped site:
+
+| Directory | Contents | Used by |
+|---|---|---|
+| `rke2/` | `install.sh`, `rke2.linux-amd64.tar.gz`, checksums, `rke2-images-core` + `rke2-images-canal` bundles | `INSTALL_RKE2_ARTIFACT_PATH` tarball install |
+| `images/` | every image the charts and manifests reference, found by `helm template`, pulled with `crane` as `.tar.zst` | copied to `/var/lib/rancher/rke2/agent/images/`, imported by RKE2 at start |
+| `charts/` | Helm charts, including the packaged NGDATA Mimir chart | `lgtm.yml` |
+| `bin/` | `garage`, `helm`, `kubectl`, `crane` | nodes (`garage`) and the Ansible host |
+| `plugins/` | Grafana Drilldown apps | baked into `lgtm.local/grafana:13.2.3-drilldown` via `crane append` |
+
+Images that exist only locally are named `lgtm.local/…` and use `imagePullPolicy: Never`. These are Grafana
+with the plugins and the demo app. Everything else uses `IfNotPresent` with pinned tags, so kubelet never
+contacts a registry.
 
 ## Data flow
 
@@ -128,7 +160,7 @@ Stop any one VM with `vagrant halt lgtm2` (or `virsh destroy`). This is what kee
 | Loki / Mimir | 3 replicas, replication factor 3, quorum writes and reads on 2 of 3 |
 | Pyroscope | raft metastore with 3 members (quorum 2), segment writers on every replica |
 | Tempo | **single instance** (Tempo 3 monolithic doesn't support more than one `-target=all`). It runs without a PVC and tolerates an unreachable node for only 30 s, so it reschedules quickly. Traces still buffered in its WAL at that moment are lost. Already stored traces are in S3. For real HA, use `tempo-distributed` |
-| Grafana | stateless and fully provisioned. It reschedules after 30 s like Tempo. Use an external database to run several replicas |
+| Grafana | stateless and fully provisioned. It reschedules after 30 s like Tempo, and starts fast because the plugins are in the image. Use an external database to run several replicas |
 | Alloy | DaemonSet. The Service routes OTLP to any live instance |
 
 Stateful pods with local-path volumes (Loki, Mimir, Pyroscope) stay `Pending` until their node returns. The
@@ -143,9 +175,9 @@ Notes:
 
 ## From the lab to a real cluster
 
-* Replace the Vagrant private network with your server network. Pick a free VIP in that subnet and set it in
-  `Vagrantfile` / `scripts/env.sh`. In production, provision the same `provision/node.sh` steps with your
-  configuration management.
+* Write an inventory for your servers (address, user, key) and set `vip` in `ansible/group_vars/all.yml` to a free
+  address in their subnet. The Garage roles expect data disks `vdb`–`vdf`: change `garage_disks` in
+  `ansible/roles/garage/defaults/main.yml`.
 * Use real DNS records (`grafana.example.org` …) for the VIP, and add TLS in Traefik (cert-manager, or a
   `default` TLSStore with your certificate).
 * Data disks: see the sizing notes in [docs/s3-storage.md](docs/s3-storage.md). The local-path PVCs (WALs) live on the root disk under

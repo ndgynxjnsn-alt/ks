@@ -1,0 +1,5 @@
+rke2_first_server: "{{ inventory_hostname == groups['nodes'][0] }}"
+# The interface that carries the node IP (kube-vip announces the VIP on it, flannel uses it for VXLAN).
+rke2_iface: >-
+  {{ ansible_facts | dict2items | selectattr('value.ipv4', 'defined')
+     | selectattr('value.ipv4.address', 'equalto', ansible_host) | map(attribute='key') | first }}

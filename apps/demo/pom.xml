@@ -19,7 +19,7 @@
   <properties>
     <java.version>25</java.version>
     <otel.version>2.32.0</otel.version>
-    <image>lgtm/demo:${project.version}</image>
+    <image>lgtm.local/demo:${project.version}</image>
   </properties>
 
   <dependencies>

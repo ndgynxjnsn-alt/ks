@@ -1,0 +1,3 @@
+garage_disks: [vdb, vdc, vdd, vde, vdf]
+garage_disk_capacity: 80M     # per data disk (100 MB disks minus ext4 overhead)
+garage_node_capacity: 400M    # layout capacity per node

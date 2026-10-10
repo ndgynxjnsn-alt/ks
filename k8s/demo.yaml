@@ -41,7 +41,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: lgtm/demo:1.0.0
+          image: lgtm.local/demo:1.0.0
           imagePullPolicy: Never
           envFrom: [{ configMapRef: { name: telemetry } }]
           env:
@@ -73,7 +73,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: lgtm/demo:1.0.0
+          image: lgtm.local/demo:1.0.0
           imagePullPolicy: Never
           envFrom: [{ configMapRef: { name: telemetry } }]
           env:

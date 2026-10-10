@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+token: {{ rke2_token }}
+node-ip: {{ ansible_host }}
+tls-san: ["{{ vip }}", "{{ ansible_host }}"]
+write-kubeconfig-mode: "0600"
+{% if not rke2_first_server %}
+server: https://{{ vip }}:9345
+{% endif %}

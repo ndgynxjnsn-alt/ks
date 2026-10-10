@@ -1,0 +1,71 @@
+# RKE2 server in air-gap mode: tarball install + every container image preloaded from artifacts/.
+- name: Kernel settings (inotify for Alloy/Loki)
+  ansible.posix.sysctl: { name: "{{ item.key }}", value: "{{ item.value }}", sysctl_file: /etc/sysctl.d/90-lgtm.conf }
+  loop: "{{ {'fs.inotify.max_user_instances': 1024, 'fs.inotify.max_user_watches': 1048576} | dict2items }}"
+
+- name: Default route (only when the inventory sets default_gateway)
+  ansible.builtin.copy:
+    dest: /etc/netplan/60-default-route.yaml
+    mode: "0600"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ rke2_iface }}:
+            routes: [{ to: default, via: {{ default_gateway }} }]
+  when: default_gateway is defined
+  register: default_route
+
+- name: Apply netplan
+  ansible.builtin.command: netplan apply
+  when: default_route.changed
+
+- name: Create directories
+  ansible.builtin.file: { path: "{{ item }}", state: directory, mode: "0755" }
+  loop: [/root/rke2-artifacts, /etc/rancher/rke2, "{{ rke2_images_dir }}", /var/lib/rancher/rke2/server/manifests]
+
+- name: Copy RKE2 tarball and install script
+  ansible.builtin.copy: { src: "{{ artifacts_dir }}/rke2/{{ item }}", dest: /root/rke2-artifacts/, mode: "0644" }
+  loop: [install.sh, rke2.linux-amd64.tar.gz, sha256sum-amd64.txt]
+
+# RKE2 imports every archive in agent/images at start (and watches the directory afterwards).
+- name: Preload container images
+  ansible.builtin.copy: { src: "{{ item }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
+  loop: "{{ query('fileglob', artifacts_dir + '/rke2/rke2-images-*.tar.zst') + query('fileglob', artifacts_dir + '/images/*.tar.zst') }}"
+  loop_control: { label: "{{ item | basename }}" }
+
+- name: Install RKE2 from the tarball
+  ansible.builtin.command: sh /root/rke2-artifacts/install.sh
+  environment:
+    INSTALL_RKE2_ARTIFACT_PATH: /root/rke2-artifacts
+    INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+  args: { creates: /usr/local/bin/rke2 }
+
+- name: Configure RKE2
+  ansible.builtin.template: { src: config.yaml.j2, dest: /etc/rancher/rke2/config.yaml, mode: "0600" }
+
+- name: Add-on manifests applied by RKE2 itself
+  ansible.builtin.template: { src: "{{ item }}.j2", dest: "/var/lib/rancher/rke2/server/manifests/{{ item }}", mode: "0644" }
+  loop: [kube-vip.yaml, rke2-canal-config.yaml]
+
+- name: Local-path storage manifest
+  ansible.builtin.copy: { src: local-path-storage.yaml, dest: /var/lib/rancher/rke2/server/manifests/, mode: "0644" }
+
+- name: Start RKE2 server
+  ansible.builtin.systemd_service: { name: rke2-server, enabled: true, state: started }
+
+- name: Wait until the cluster answers on the VIP (kube-vip)
+  ansible.builtin.uri: { url: "https://{{ vip }}:9345/ping", validate_certs: false, return_content: true }
+  register: ping
+  until: ping.status == 200
+  retries: 60
+  delay: 5
+
+- name: Shell environment for kubectl/crictl on the node
+  ansible.builtin.copy:
+    dest: /etc/profile.d/rke2.sh
+    mode: "0644"
+    content: |
+      export PATH=$PATH:/var/lib/rancher/rke2/bin
+      export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+      export CONTAINER_RUNTIME_ENDPOINT=unix:///run/k3s/containerd/containerd.sock

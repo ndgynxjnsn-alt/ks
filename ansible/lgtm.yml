@@ -1,0 +1,54 @@
+# Installs/updates the LGTM stack from the downloaded charts (artifacts/charts) using ./kubeconfig.
+# Images are preloaded on the nodes by site.yml, so the cluster needs no registry access.
+- name: Deploy the LGTM stack
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    releases:
+      - name: loki
+        chart: "loki-{{ charts.loki.version }}.tgz"
+        secrets:
+          loki: { storage: { s3: { endpoint: "{{ s3_endpoint }}", accessKeyId: "{{ s3_access_key_id }}", secretAccessKey: "{{ s3_secret_access_key }}" } } }
+      - name: mimir
+        chart: "mimir-distributed-{{ mimir_chart.version }}.tgz"
+        secrets:
+          mimir: { structuredConfig: { common: { storage: { s3: { endpoint: "{{ s3_endpoint }}", access_key_id: "{{ s3_access_key_id }}", secret_access_key: "{{ s3_secret_access_key }}" } } } } }
+      - name: tempo
+        chart: "tempo-{{ charts.tempo.version }}.tgz"
+        secrets:
+          tempo: { storage: { trace: { s3: { endpoint: "{{ s3_endpoint }}", access_key: "{{ s3_access_key_id }}", secret_key: "{{ s3_secret_access_key }}" } } } }
+      - name: pyroscope
+        chart: "pyroscope-{{ charts.pyroscope.version }}.tgz"
+        secrets:
+          pyroscope: { structuredConfig: { storage: { s3: { endpoint: "{{ s3_endpoint }}", access_key_id: "{{ s3_access_key_id }}", secret_access_key: "{{ s3_secret_access_key }}" } } } }
+      - name: alloy
+        chart: "alloy-{{ charts.alloy.version }}.tgz"
+        secrets: {}
+      - name: grafana
+        chart: "grafana-{{ charts.grafana.version }}.tgz"
+        secrets: { adminPassword: "{{ grafana_admin_password }}" }
+  tasks:
+    - name: Install Helm releases
+      kubernetes.core.helm:
+        name: "{{ item.name }}"
+        chart_ref: "{{ artifacts_dir }}/charts/{{ item.chart }}"
+        release_namespace: lgtm
+        create_namespace: true
+        values_files: ["{{ repo_dir }}/k8s/values/{{ item.name }}.yaml"]
+        values: "{{ item.secrets }}"
+        wait: true
+        wait_timeout: 15m
+        binary_path: "{{ artifacts_dir }}/bin/helm"
+        kubeconfig: "{{ repo_dir }}/kubeconfig"
+      loop: "{{ releases }}"
+      loop_control: { label: "{{ item.name }}" }
+
+    - name: Apply ingresses
+      ansible.builtin.command: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig apply -f {{ repo_dir }}/k8s/ingress.yaml"
+      register: ingress
+      changed_when: "'configured' in ingress.stdout or 'created' in ingress.stdout"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "Grafana: http://grafana.org  user admin, password in .secrets/grafana_admin_password"

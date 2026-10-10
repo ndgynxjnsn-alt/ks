@@ -1,0 +1,129 @@
+# Runs on the Ansible host (needs internet). Fetches everything the offline nodes need into artifacts/:
+#   rke2/    RKE2 tarball install + air-gap image bundles
+#   bin/     garage, helm, kubectl, crane
+#   charts/  Helm charts (incl. the packaged NGDATA Mimir chart)
+#   images/  every container image referenced by the charts and manifests (.tar.zst, imported by RKE2)
+- name: Download artifacts for an offline installation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    rke2_url: "https://github.com/rancher/rke2/releases/download/{{ rke2_version | urlencode }}"
+    images_dir: "{{ artifacts_dir }}/images"
+    # images used outside the Helm charts (RKE2 add-on manifests in ansible/roles/rke2/templates)
+    extra_images:
+      - ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }}
+      - docker.io/rancher/local-path-provisioner:{{ local_path_provisioner_version }}
+      - docker.io/library/busybox:1.37
+  tasks:
+    - name: Create artifact directories
+      ansible.builtin.file: { path: "{{ artifacts_dir }}/{{ item }}", state: directory, mode: "0755" }
+      loop: [rke2, bin, charts, images, plugins, work]
+
+    # ------------------------------------------------------------ binaries
+    - name: Download RKE2 tarball, air-gap images and install script
+      ansible.builtin.get_url:
+        url: "{{ item }}"
+        dest: "{{ artifacts_dir }}/rke2/"
+        mode: "0644"
+      loop:
+        - https://get.rke2.io/install.sh
+        - "{{ rke2_url }}/rke2.linux-amd64.tar.gz"
+        - "{{ rke2_url }}/sha256sum-amd64.txt"
+        - "{{ rke2_url }}/rke2-images-core.linux-amd64.tar.zst"
+        - "{{ rke2_url }}/rke2-images-canal.linux-amd64.tar.zst"
+
+    - name: Download garage, kubectl
+      ansible.builtin.get_url: { url: "{{ item.url }}", dest: "{{ artifacts_dir }}/bin/{{ item.name }}", mode: "0755" }
+      loop:
+        - { name: garage, url: "https://garagehq.deuxfleurs.fr/_releases/{{ garage_version }}/x86_64-unknown-linux-musl/garage" }
+        - { name: kubectl, url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl" }
+
+    - name: Download helm and crane
+      ansible.builtin.unarchive:
+        src: "{{ item.url }}"
+        dest: "{{ artifacts_dir }}/bin"
+        remote_src: true
+        include: ["{{ item.member }}"]
+        extra_opts: ["--strip-components={{ item.strip }}"]
+        creates: "{{ artifacts_dir }}/bin/{{ item.member | basename }}"
+      loop:
+        - { url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz", member: linux-amd64/helm, strip: 1 }
+        - { url: "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz", member: crane, strip: 0 }
+
+    # ------------------------------------------------------------ charts
+    - name: Download Helm charts
+      ansible.builtin.command:
+        cmd: "{{ artifacts_dir }}/bin/helm pull {{ item.key }} --repo {{ item.value.repo }} --version {{ item.value.version }} -d {{ artifacts_dir }}/charts"
+        creates: "{{ artifacts_dir }}/charts/{{ item.key }}-{{ item.value.version }}.tgz"
+      loop: "{{ charts | dict2items }}"
+      loop_control: { label: "{{ item.key }}" }
+
+    - name: Package the NGDATA Mimir chart
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          rm -rf work/ngdata-mimir
+          git clone -q --filter=blob:none --no-checkout {{ mimir_chart.repo }} work/ngdata-mimir
+          cd work/ngdata-mimir
+          git sparse-checkout set operations/helm/charts/mimir-distributed operations/mimir-mixin-compiled
+          git checkout -q {{ mimir_chart.commit }}
+          chart=operations/helm/charts/mimir-distributed
+          # Sub-charts (minio, rollout-operator, agent operator) are disabled but helm needs them present.
+          {{ artifacts_dir }}/bin/helm repo add minio https://charts.min.io/ --force-update >/dev/null
+          {{ artifacts_dir }}/bin/helm repo add grafana https://grafana.github.io/helm-charts --force-update >/dev/null
+          {{ artifacts_dir }}/bin/helm dependency build $chart >/dev/null 2>&1
+          {{ artifacts_dir }}/bin/helm package $chart -d {{ artifacts_dir }}/charts 2>/dev/null
+        chdir: "{{ artifacts_dir }}"
+        creates: "{{ artifacts_dir }}/charts/mimir-distributed-{{ mimir_chart.version }}.tgz"
+
+    # ------------------------------------------------------------ images
+    - name: Render charts and manifests to find every image they use
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          helm={{ artifacts_dir }}/bin/helm; v={{ repo_dir }}/k8s/values; c={{ artifacts_dir }}/charts
+          {
+            $helm template loki $c/loki-{{ charts.loki.version }}.tgz -f $v/loki.yaml
+            $helm template mimir $c/mimir-distributed-{{ mimir_chart.version }}.tgz -f $v/mimir.yaml
+            $helm template tempo $c/tempo-{{ charts.tempo.version }}.tgz -f $v/tempo.yaml
+            $helm template pyroscope $c/pyroscope-{{ charts.pyroscope.version }}.tgz -f $v/pyroscope.yaml
+            $helm template alloy $c/alloy-{{ charts.alloy.version }}.tgz -f $v/alloy.yaml
+            $helm template grafana $c/grafana-{{ charts.grafana.version }}.tgz -f $v/grafana.yaml
+          } 2>/dev/null | grep -oP '^\s*(- )?image:\s*["'"'"']?\K[^"'"'"'\s]+' | sort -u
+      register: chart_images
+      changed_when: false
+
+    - name: Pull images with crane (linux/amd64), zstd-compressed for RKE2's image import
+      ansible.builtin.shell:
+        cmd: >-
+          {{ artifacts_dir }}/bin/crane pull --platform linux/amd64 {{ item }} {{ images_dir }}/{{ file }}.tar
+          && zstd -q --rm -f {{ images_dir }}/{{ file }}.tar
+        creates: "{{ images_dir }}/{{ file }}.tar.zst"
+      vars:
+        file: "{{ item | regex_replace('[/:@]', '_') }}"
+      loop: "{{ (chart_images.stdout_lines + extra_images) | reject('match', 'lgtm.local/') | unique }}"
+      loop_control: { label: "{{ item }}" }
+
+    # ------------------------------------------------------------ Grafana with Drilldown plugins baked in
+    - name: Download Grafana Drilldown plugins
+      ansible.builtin.get_url:
+        url: "https://grafana.com/api/plugins/{{ item.id }}/versions/{{ item.version }}/download"
+        dest: "{{ artifacts_dir }}/plugins/{{ item.id }}-{{ item.version }}.zip"
+        mode: "0644"
+      loop: "{{ grafana_plugins }}"
+
+    - name: Build the Grafana image (base image + plugin layer in plugins-bundled)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          rm -rf work/grafana-layer && mkdir -p work/grafana-layer/usr/share/grafana/data/plugins-bundled
+          for z in plugins/*.zip; do unzip -q -o "$z" -d work/grafana-layer/usr/share/grafana/data/plugins-bundled; done
+          tar -C work/grafana-layer --owner=0 --group=0 -czf work/grafana-plugins.tar.gz usr
+          bin/crane append --platform linux/amd64 -b {{ grafana_base_image }} -f work/grafana-plugins.tar.gz \
+            -t {{ grafana_image }} -o images/{{ file }}.tar
+          zstd -q --rm -f images/{{ file }}.tar
+        chdir: "{{ artifacts_dir }}"
+        creates: "{{ images_dir }}/{{ file }}.tar.zst"
+      vars:
+        file: "{{ grafana_image | regex_replace('[/:@]', '_') }}"

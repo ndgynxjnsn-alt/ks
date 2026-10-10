@@ -1,0 +1,56 @@
+# Builds the demo app image on the Ansible host (Jib, no Docker daemon), loads it on every node, deploys it.
+- name: Build the demo image
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    app_dir: "{{ repo_dir }}/apps/demo"
+  tasks:
+    - name: Compile
+      ansible.builtin.command: ./mvnw -q clean package -DskipTests
+      args: { chdir: "{{ app_dir }}" }
+
+    - name: Download the OTel Java agent and the Pyroscope OTel extension
+      ansible.builtin.get_url: { url: "{{ item }}", dest: "{{ app_dir }}/target/agents/", mode: "0644" }
+      loop:
+        - https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v{{ otel_agent_version }}/opentelemetry-javaagent.jar
+        - https://github.com/grafana/otel-profiling-java/releases/download/v{{ pyroscope_otel_version }}/pyroscope-otel-javaagent-extension.jar
+
+    - name: Build image tarball
+      ansible.builtin.command: ./mvnw -q jib:buildTar -Dimage={{ demo_image }}
+      args: { chdir: "{{ app_dir }}" }
+
+- name: Load the image on every node
+  hosts: nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Copy image tarball
+      ansible.builtin.copy:
+        src: "{{ repo_dir }}/apps/demo/target/jib-image.tar"
+        dest: /var/lib/rancher/rke2/agent/images/demo.tar
+        mode: "0644"
+      register: demo_tar
+
+    - name: Import image into containerd
+      ansible.builtin.command: >-
+        /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io
+        images import /var/lib/rancher/rke2/agent/images/demo.tar
+      when: demo_tar.changed
+
+- name: Deploy the demo app
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubectl: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig"
+  tasks:
+    - name: Apply manifests
+      ansible.builtin.command: "{{ kubectl }} apply -f {{ repo_dir }}/k8s/demo.yaml"
+
+    - name: Restart deployments to pick up the new image
+      ansible.builtin.command: "{{ kubectl }} -n demo rollout restart deployment"
+
+    - name: Wait for rollout
+      ansible.builtin.command: "{{ kubectl }} -n demo rollout status deployment --timeout 5m"
+      changed_when: false

@@ -1,0 +1,33 @@
+# Sets up the nodes completely offline from artifacts/ (run download.yml first).
+- name: Garage S3 on every node
+  hosts: nodes
+  become: true
+  roles: [garage]
+
+- name: First RKE2 server (bootstraps etcd and kube-vip)
+  hosts: nodes[0]
+  become: true
+  roles: [rke2]
+
+- name: Remaining RKE2 servers, one at a time (etcd members join sequentially)
+  hosts: nodes[1:]
+  become: true
+  serial: 1
+  roles: [rke2]
+
+- name: Kubeconfig for the Ansible host, pointing at the VIP
+  hosts: nodes[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read admin kubeconfig
+      ansible.builtin.slurp: { src: /etc/rancher/rke2/rke2.yaml }
+      register: kubeconfig
+
+    - name: Write ./kubeconfig
+      ansible.builtin.copy:
+        content: "{{ kubeconfig.content | b64decode | replace('https://127.0.0.1:6443', 'https://' + vip + ':6443') }}"
+        dest: "{{ repo_dir }}/kubeconfig"
+        mode: "0600"
+      delegate_to: localhost
+      become: false

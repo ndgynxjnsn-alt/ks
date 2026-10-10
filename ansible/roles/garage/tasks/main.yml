@@ -1,0 +1,55 @@
+# Five data disks per node -> ext4 -> /srv/garage/dataN, used as Garage data directories.
+- name: Format data disks
+  community.general.filesystem:
+    dev: "/dev/{{ item }}"
+    fstype: ext4
+    opts: "-L garage{{ idx + 1 }} -m 0"
+  loop: "{{ garage_disks }}"
+  loop_control: { index_var: idx }
+
+- name: Mount data disks
+  ansible.posix.mount:
+    path: "/srv/garage/data{{ idx + 1 }}"
+    src: "LABEL=garage{{ idx + 1 }}"
+    fstype: ext4
+    opts: defaults,noatime
+    state: mounted
+  loop: "{{ garage_disks }}"
+  loop_control: { index_var: idx }
+
+- name: Install garage binary
+  ansible.builtin.copy:
+    src: "{{ artifacts_dir }}/bin/garage"
+    dest: /usr/local/bin/garage
+    mode: "0755"
+  notify: Restart garage
+
+- name: Create metadata directory
+  ansible.builtin.file: { path: /var/lib/garage/meta, state: directory, mode: "0700" }
+
+- name: Configure garage
+  ansible.builtin.template: { src: garage.toml.j2, dest: /etc/garage.toml, mode: "0600" }
+  notify: Restart garage
+
+- name: Install systemd unit
+  ansible.builtin.template: { src: garage.service.j2, dest: /etc/systemd/system/garage.service, mode: "0644" }
+  notify: Restart garage
+
+- name: Start garage
+  ansible.builtin.systemd_service: { name: garage, enabled: true, state: started, daemon_reload: true }
+
+- name: Apply pending restarts
+  ansible.builtin.meta: flush_handlers
+
+- name: Read this node's Garage id
+  ansible.builtin.command: garage -c /etc/garage.toml node id -q
+  register: garage_node_id
+  changed_when: false
+  retries: 10
+  delay: 3
+  until: garage_node_id.rc == 0
+
+- name: Form the cluster (layout, key, buckets)
+  ansible.builtin.include_tasks: cluster.yml
+  args: { apply: { run_once: true } }
+  run_once: true

@@ -61,11 +61,8 @@ mimir:
       storage:
         backend: s3
         s3:
-          endpoint: ${S3_ENDPOINT}
           region: garage
           insecure: true
-          access_key_id: ${S3_ACCESS_KEY_ID}
-          secret_access_key: ${S3_SECRET_ACCESS_KEY}
     blocks_storage:
       s3: { bucket_name: mimir-blocks }
     ruler_storage:

@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Garage S3 object storage
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/garage -c /etc/garage.toml server
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

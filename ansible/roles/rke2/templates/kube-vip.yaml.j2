@@ -68,11 +68,11 @@ spec:
         - operator: Exists
       containers:
         - name: kube-vip
-          image: ghcr.io/kube-vip/kube-vip:${KUBEVIP_VERSION}
+          image: ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }}
           args: ["manager"]
           env:
-            - { name: address, value: "${VIP}" }
-            - { name: vip_interface, value: "${IFACE}" }
+            - { name: address, value: "{{ vip }}" }
+            - { name: vip_interface, value: "{{ rke2_iface }}" }
             - { name: vip_cidr, value: "32" }
             - { name: vip_arp, value: "true" }
             - { name: port, value: "6443" }

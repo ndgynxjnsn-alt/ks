@@ -1,4 +1,4 @@
-# Upstream rancher/local-path-provisioner v0.0.37, marked as default StorageClass.
+# Upstream rancher/local-path-provisioner v0.0.37: default StorageClass, helper image pinned for offline use.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -185,5 +185,6 @@ data:
           effect: NoSchedule
       containers:
       - name: helper-pod
-        image: docker.io/library/busybox
+        image: docker.io/library/busybox:1.37
+        imagePullPolicy: IfNotPresent
         imagePullPolicy: IfNotPresent

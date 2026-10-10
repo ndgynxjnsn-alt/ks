@@ -1,0 +1,49 @@
+# Runs once: connects all nodes, assigns the initial layout, creates the access key and the buckets.
+- name: Connect all Garage nodes
+  ansible.builtin.command: garage -c /etc/garage.toml node connect {{ hostvars[item].garage_node_id.stdout }}
+  loop: "{{ ansible_play_hosts }}"
+  changed_when: false
+
+- name: Read layout
+  ansible.builtin.command: garage -c /etc/garage.toml layout show
+  register: garage_layout
+  changed_when: false
+
+- name: Assign initial layout (one zone, equal capacity)
+  ansible.builtin.command: >-
+    garage -c /etc/garage.toml layout assign {{ hostvars[item].garage_node_id.stdout.split('@')[0] }}
+    -z dc1 -c {{ garage_node_capacity }} -t {{ item }}
+  loop: "{{ ansible_play_hosts }}"
+  when: "'No nodes currently have a role' in garage_layout.stdout"
+
+- name: Apply initial layout
+  ansible.builtin.command: garage -c /etc/garage.toml layout apply --version 1
+  when: "'No nodes currently have a role' in garage_layout.stdout"
+
+- name: Check access key
+  ansible.builtin.command: garage -c /etc/garage.toml key info lgtm
+  register: garage_key
+  changed_when: false
+  failed_when: false
+
+- name: Import access key
+  ansible.builtin.command: garage -c /etc/garage.toml key import --yes -n lgtm {{ s3_access_key_id }} {{ s3_secret_access_key }}
+  when: garage_key.rc != 0
+
+- name: Check buckets
+  ansible.builtin.command: garage -c /etc/garage.toml bucket info {{ item }}
+  loop: "{{ garage_buckets }}"
+  register: garage_bucket
+  changed_when: false
+  failed_when: false
+
+- name: Create buckets
+  ansible.builtin.command: garage -c /etc/garage.toml bucket create {{ item.item }}
+  loop: "{{ garage_bucket.results }}"
+  loop_control: { label: "{{ item.item }}" }
+  when: item.rc != 0
+
+- name: Grant the access key to all buckets
+  ansible.builtin.command: garage -c /etc/garage.toml bucket allow --read --write --owner {{ item }} --key lgtm
+  loop: "{{ garage_buckets }}"
+  changed_when: false

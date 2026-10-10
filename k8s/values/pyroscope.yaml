@@ -21,11 +21,8 @@ pyroscope:
     storage:
       backend: s3
       s3:
-        endpoint: ${S3_ENDPOINT}
         region: garage
         bucket_name: pyroscope-data
-        access_key_id: ${S3_ACCESS_KEY_ID}
-        secret_access_key: ${S3_SECRET_ACCESS_KEY}
         insecure: true
         force_path_style: true
     limits:

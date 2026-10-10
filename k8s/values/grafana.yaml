@@ -1,8 +1,13 @@
 # Grafana: stateless (everything provisioned), one replica that reschedules quickly when its node dies.
+# The image has the Drilldown apps baked in (built by ansible/download.yml), so nothing is downloaded at start.
 fullnameOverride: grafana
+image:
+  registry: lgtm.local
+  repository: grafana
+  tag: 13.2.3-drilldown
+  pullPolicy: Never
 replicas: 1
 adminUser: admin
-adminPassword: ${GRAFANA_ADMIN_PASSWORD}
 
 persistence:
   enabled: false
@@ -21,6 +26,9 @@ grafana.ini:
   analytics:
     reporting_enabled: false
     check_for_updates: false
+    check_for_plugin_updates: false
+  plugins:
+    preinstall_disabled: true   # offline: the Drilldown apps ship in plugins-bundled
   feature_toggles:
     enable: traceToProfiles tracesEmbeddedFlameGraph
 
