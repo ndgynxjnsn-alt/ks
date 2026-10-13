@@ -1,4 +1,20 @@
 # Sets up the nodes completely offline from artifacts/ (run download.yml first).
+- name: Bootstrap privilege escalation
+  hosts: nodes
+  gather_facts: false
+  tasks:
+    # Ubuntu 26.04 uses sudo-rs as sudo; Ansible's become can't handle its password prompt. Removing the
+    # package falls back to the classic sudo that Ubuntu still ships. Plain `raw` + `sudo -S`, no become yet.
+    - name: Replace sudo-rs with classic sudo
+      ansible.builtin.raw: |
+        if dpkg-query -W -f='${Status}' sudo-rs 2>/dev/null | grep -q 'ok installed'; then
+          printf '%s\n' {{ ansible_become_password | quote }} | sudo -S -p '' \
+            env DEBIAN_FRONTEND=noninteractive apt-get remove -y sudo-rs && echo REMOVED
+        fi
+      register: sudo_rs
+      changed_when: "'REMOVED' in sudo_rs.stdout"
+      no_log: true
+
 - name: Garage S3 on every node
   hosts: nodes
   become: true

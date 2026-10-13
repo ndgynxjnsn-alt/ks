@@ -32,8 +32,20 @@ otel_agent_version: 2.32.0
 pyroscope_otel_version: 2.1.4 # OTel extension that bundles the Pyroscope Java agent + span profiles
 
 # ---------------------------------------------------------------- network
+# Control-plane VIP: Kubernetes API (6443) and RKE2 join (9345).
 vip: 192.168.56.10
-s3_endpoint: "{{ vip }}:3900" # Garage on every node; the VIP always points at a live one
+# One floating IP per hostname. kube-vip elects a leader per IP, so they spread over the nodes and every
+# hostname enters the cluster on a different server: a "natural" load balancer. Point DNS / /etc/hosts here.
+service_vips:
+  grafana:   { ip: 192.168.56.21, host: grafana.org }
+  loki:      { ip: 192.168.56.22, host: loki.org }
+  tempo:     { ip: 192.168.56.23, host: tempo.org }
+  mimir:     { ip: 192.168.56.24, host: mimir.org }
+  pyroscope: { ip: 192.168.56.25, host: pyroscope.org }
+  alloy:     { ip: 192.168.56.26, host: alloy.org }
+  garage:    { ip: 192.168.56.27, host: garage.org }
+# In-cluster S3 endpoint: Service "garage" whose endpoints are the Garage daemons on the nodes.
+s3_endpoint: garage.lgtm.svc:3900
 
 # ---------------------------------------------------------------- paths on the Ansible host
 repo_dir: "{{ playbook_dir | dirname }}"
@@ -50,3 +62,6 @@ s3_secret_access_key: "{{ lookup('password', secrets_dir + '/s3_secret_access_ke
 grafana_admin_password: "{{ lookup('password', secrets_dir + '/grafana_admin_password chars=ascii_letters,digits length=20') }}"
 
 garage_buckets: [loki-chunks, loki-ruler, tempo-traces, mimir-blocks, mimir-ruler, mimir-alertmanager, pyroscope-data]
+
+# Pods behind the per-hostname web VIPs: RKE2's bundled Traefik.
+traefik_selector: { app.kubernetes.io/name: rke2-traefik }

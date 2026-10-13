@@ -2,6 +2,16 @@
 # Three bare servers, each with 5 small data disks for Garage S3. Nothing is provisioned here:
 # Ansible (ansible/site.yml) sets them up. Both libvirt networks are isolated (no NAT), so the VMs have
 # no internet access; the host reaches them on 192.168.56.0/24.
+require "securerandom"
+
+# Ansible logs in as "ops" with a password and uses the same password for sudo (no SSH keys, no NOPASSWD).
+# The password is generated once into .secrets/ops_password (read by ansible/inventory.yml).
+OPS_PASSWORD_FILE = File.join(__dir__, ".secrets", "ops_password")
+unless File.exist?(OPS_PASSWORD_FILE)
+  Dir.mkdir(File.dirname(OPS_PASSWORD_FILE)) unless Dir.exist?(File.dirname(OPS_PASSWORD_FILE))
+  File.write(OPS_PASSWORD_FILE, SecureRandom.alphanumeric(24))
+end
+
 NODES = {
   "lgtm1" => "192.168.56.11",
   "lgtm2" => "192.168.56.12",
@@ -9,7 +19,7 @@ NODES = {
 }
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "cloud-image/ubuntu-24.04"
+  config.vm.box = "cloud-image/ubuntu-26.04"
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
   config.vm.provider :libvirt do |lv|
@@ -23,6 +33,14 @@ Vagrant.configure("2") do |config|
     lv.management_network_address = "192.168.57.0/24"
     lv.management_network_mode = "none"
   end
+
+  # The only thing Vagrant does inside the VMs: an admin account like on a freshly installed server.
+  config.vm.provision "shell", env: { "OPS_PASSWORD" => File.read(OPS_PASSWORD_FILE).strip }, inline: <<~SHELL
+    id ops >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo ops
+    echo "ops:${OPS_PASSWORD}" | chpasswd
+    echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/10-password-auth.conf
+    systemctl reload ssh
+  SHELL
 
   NODES.each do |name, ip|
     config.vm.define name do |node|

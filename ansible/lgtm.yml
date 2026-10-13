@@ -29,6 +29,13 @@
         chart: "grafana-{{ charts.grafana.version }}.tgz"
         secrets: { adminPassword: "{{ grafana_admin_password }}" }
   tasks:
+    - name: Floating IPs per hostname (LoadBalancer Services) and the in-cluster Garage endpoint
+      ansible.builtin.command:
+        cmd: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig apply -f -"
+        stdin: "{{ lookup('template', 'templates/vips.yaml.j2') }}"
+      register: vips
+      changed_when: "'configured' in vips.stdout or 'created' in vips.stdout"
+
     # helm CLI directly: kubernetes.core.helm 6.x still calls `helm list --all`, which Helm 4 removed.
     # Secrets are passed on stdin (-f -), so they never land on disk or in the process list.
     - name: Install Helm releases
@@ -57,4 +64,6 @@
 
     - name: Done
       ansible.builtin.debug:
-        msg: "Grafana: http://grafana.org  user admin, password in .secrets/grafana_admin_password"
+        msg:
+          - "Grafana: http://grafana.org  user admin, password in .secrets/grafana_admin_password"
+          - "/etc/hosts: {{ service_vips.values() | map(attribute='ip') | zip(service_vips.values() | map(attribute='host')) | map('join', ' ') | list }}"

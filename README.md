@@ -12,11 +12,13 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 * The Helm charts are deployed from local `.tgz` files.
 
 ```
-                         host: /etc/hosts  *.org -> 192.168.56.10 (VIP)
+   host: /etc/hosts  grafana.org .21 · loki.org .22 · tempo.org .23 · mimir.org .24 · pyroscope.org .25
+                     alloy.org .26 · garage.org .27              (all 192.168.56.x, one floating IP each)
                                               │
-        ┌──────────── kube-vip (ARP leader election) moves the VIP between servers ──────────┐
-        │  :6443 Kubernetes API   :9345 RKE2 join   :80/:443 Traefik (hostPort)  :3900 Garage S3 │
-        ▼                                     ▼                                     ▼
+     ┌─ kube-vip: one leader election per IP, so the IPs spread over the servers ("natural" load balancer) ─┐
+     │  .10 :6443 Kubernetes API / :9345 RKE2 join                                                          │
+     │  .21–.26 → Traefik (on the node holding the IP) → Ingress by Host   ·   .27 → Garage S3 on the nodes   │
+     ▼                                     ▼                                     ▼
   lgtm1 192.168.56.11               lgtm2 192.168.56.12                 lgtm3 192.168.56.13
   RKE2 server (etcd, CP, worker)    RKE2 server (etcd, CP, worker)      RKE2 server (etcd, CP, worker)
   Garage (5 × 100 MB disks)         Garage (5 × 100 MB disks)           Garage (5 × 100 MB disks)
@@ -28,9 +30,10 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 | Component | Version | Mode / HA |
 |---|---|---|
 | RKE2 | v1.37.1+rke2r1 | 3 servers, embedded etcd (quorum 2/3), all schedulable |
-| kube-vip | v1.2.4 | DaemonSet, ARP, VIP `192.168.56.10` |
-| Traefik | bundled with RKE2 (default ingress since v1.36) | DaemonSet with hostPort 80/443 |
-| Garage (S3) | v2.4.1 | systemd on every VM, replication factor 3, see [docs/s3-storage.md](docs/s3-storage.md) |
+| kube-vip | v1.2.4 | DaemonSet, ARP. Control-plane VIP `.10`, plus one LoadBalancer IP per hostname (`.21`–`.27`) with per-service leader election |
+| Traefik | bundled with RKE2 (default ingress since v1.36) | DaemonSet. Reached through the per-hostname IPs (`externalTrafficPolicy: Local`) |
+| Garage (S3) | v2.4.1 | systemd on every VM, replication factor 3, `garage.org`, see [docs/s3-storage.md](docs/s3-storage.md) |
+| OS | Ubuntu 26.04 LTS | `sudo-rs` replaced by classic sudo (Ansible's become can't drive sudo-rs) |
 | Loki | 3.7.8 (chart 18.15.0) | monolithic, 3 replicas, replication factor 3 |
 | Mimir | 3.2.2 ([NGDATA fork](https://github.com/NGDATA/mimir) chart 6.0.6) | monolithic, 3 replicas, replication factor 3 |
 | Tempo | 3.1.0 (chart 3.1.0) | monolithic, 1 replica (see below) |
@@ -61,11 +64,28 @@ source scripts/env.sh                  # kubectl/helm from artifacts/bin with ./
 
 All playbooks are idempotent. Re-run `lgtm.yml` after changing anything in `k8s/`.
 
-Point the hostnames at the VIP in `/etc/hosts`:
+Point each hostname at its own floating IP in `/etc/hosts` (or DNS):
 
 ```
-192.168.56.10 grafana.org loki.org tempo.org mimir.org alloy.org pyroscope.org
+192.168.56.21 grafana.org
+192.168.56.22 loki.org
+192.168.56.23 tempo.org
+192.168.56.24 mimir.org
+192.168.56.25 pyroscope.org
+192.168.56.26 alloy.org
+192.168.56.27 garage.org
 ```
+
+Each IP is a Kubernetes `LoadBalancer` Service with a `kube-vip.io/loadbalancerIPs` annotation
+(`ansible/templates/vips.yaml.j2`, addresses in `ansible/group_vars/all.yml`). kube-vip runs a separate
+leader election for each one, so the IPs end up on different servers. Each hostname therefore enters the
+cluster on a different node, and a failed node only moves its IPs. The web IPs lead to the Traefik pod on the node
+that holds them, and Traefik routes by Host header. `garage.org` (ports 80 and 3900) leads to the Garage daemons on all
+three nodes. Inside the cluster, the same Service, `garage.lgtm.svc:3900`, is the S3 endpoint.
+
+The spread is decided by who wins each election, not by a balancing algorithm. On a fresh cluster one node often
+wins most of them (in one test: 5 / 2 / 0). Elections are re-run when a node fails, so the IPs reshuffle over time.
+`kubectl get lease -A | grep kubevip` shows the current owner of each IP.
 
 | URL | What |
 |---|---|
@@ -73,9 +93,21 @@ Point the hostnames at the VIP in `/etc/hosts`:
 | http://grafana.org/drilldown | Metrics, Logs, Traces and Profiles Drilldown apps |
 | http://alloy.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/traces`, `/v1/metrics`, `/v1/logs`) and Pyroscope pushes (`/ingest`) from outside the cluster |
 | http://loki.org, http://mimir.org, http://tempo.org, http://pyroscope.org | Backend HTTP APIs (Pyroscope has its own UI) |
+| http://garage.org | Garage S3 API (also on port 3900) |
 
 Ansible generates all secrets (RKE2 token, Garage keys, Grafana password) on first use, one file each in
 `.secrets/`. Git ignores that directory.
+
+**Access:** Vagrant creates only an admin user `ops` with a password (`.secrets/ops_password`), and its sudo requires that
+password, as on a freshly installed server. Ansible logs in with that password (`sshpass` must be installed)
+and uses it for `become`. No SSH keys are used. On Ubuntu 26.04, the first play removes `sudo-rs` with a plain `raw` +
+`sudo -S`, because Ansible's become can't handle sudo-rs's password prompt. The classic `sudo` package that
+Ubuntu still ships then takes over.
+
+**Data disks** are detected, not listed: every whole disk without partitions or holders, sorted by name, becomes
+`/srv/garage/data1..N` (label `garage1..N`). **Every `site.yml` run rebuilds Garage**: it stops it, unmounts the disks,
+wipes the metadata, force-formats the disks and re-forms the cluster, buckets and key. **All S3 data is erased on each run.**
+Re-run `lgtm.yml` afterwards. Loki, Mimir, Tempo and Pyroscope continue with new data.
 
 ## Repository layout
 
@@ -86,7 +118,8 @@ ansible/inventory.yml            the three nodes (copy for real servers)
 ansible/group_vars/all.yml       versions, VIP, secrets (generated into .secrets/)
 ansible/download.yml             host: fetch everything into artifacts/ (the only online step)
 ansible/site.yml                 nodes: roles garage + rke2, fetch ./kubeconfig
-ansible/roles/garage/            disks → ext4 → Garage systemd service; cluster layout, key, buckets
+ansible/roles/garage/            detect disks → wipe + ext4 → Garage systemd service; cluster layout, key, buckets
+ansible/templates/vips.yaml.j2   per-hostname LoadBalancer Services (floating IPs), Garage endpoints
 ansible/roles/rke2/              tarball install, image preload, config, kube-vip / canal / local-path manifests
 ansible/lgtm.yml                 Helm releases from artifacts/charts + ingresses
 ansible/demo.yml                 build + load + deploy the demo app
@@ -133,7 +166,7 @@ log line → trace (`trace_id` structured metadata), and Tempo's service map fro
 
 `apps/demo` is one Spring Boot 4.1 image deployed twice:
 
-* **shop** runs a load generator (2 orders/s) and serves `/api/orders/{item}`. It calls **inventory**
+* **shop** runs a load generator (2 orders/s per replica, 2 replicas) and serves `/api/orders/{item}`. It calls **inventory**
   and computes a price in a CPU-heavy `@WithSpan("calculate-price")` method.
 * **inventory** serves `/api/inventory/{item}` with random latency (the item `anvil` is slow) and about 5% HTTP 503 errors.
 
@@ -155,7 +188,7 @@ Stop any one VM with `vagrant halt lgtm2` (or `virsh destroy`). This is what kee
 | Layer | Why it survives one node loss |
 |---|---|
 | Kubernetes API | etcd quorum 2/3; kube-vip moves the VIP to a surviving server (measured 9–52 s: etcd must re-elect before the kube-vip lease can move) |
-| Ingress | Traefik runs on every node via hostPort, and the VIP follows a live node |
+| Ingress | Traefik runs on every node. Each hostname's IP moves to a surviving node on its own (per-service leader election) |
 | S3 | Garage stores 3 copies and serves reads and writes with 2 of 3 nodes |
 | Loki / Mimir | 3 replicas, replication factor 3, quorum writes and reads on 2 of 3 |
 | Pyroscope | raft metastore with 3 members (quorum 2), segment writers on every replica |
@@ -168,18 +201,19 @@ other two replicas carry the load in the meantime.
 
 Notes:
 
-* Garage is reached through the VIP. If Garage alone dies on the node that currently holds the VIP,
-  S3 calls fail until the VIP moves (`systemctl restart garage` or move the VIP). In production, use a DNS name with all
-  three node IPs or a small HAProxy instead.
+* The Garage Service's endpoints are static node IPs (Garage runs outside Kubernetes), so kube-proxy can't
+  health-check them. If Garage stops on a node that is otherwise up, about 1 in 3 new S3 connections to it fails until it
+  is back. Clients retry, but for production consider readiness via a small DaemonSet proxy.
 * With 3 etcd members, losing **two** servers makes the API read-only and unavailable. That's inherent to quorum.
 
 ## From the lab to a real cluster
 
-* Write an inventory for your servers (address, user, key) and set `vip` in `ansible/group_vars/all.yml` to a free
-  address in their subnet. The Garage roles expect data disks `vdb`–`vdf`: change `garage_disks` in
-  `ansible/roles/garage/defaults/main.yml`.
-* Use real DNS records (`grafana.example.org` …) for the VIP, and add TLS in Traefik (cert-manager, or a
-  `default` TLSStore with your certificate).
+* Write an inventory for your servers (address, user, password in ansible-vault). Set `vip` and `service_vips` in
+  `ansible/group_vars/all.yml` to free addresses in their subnet, and create matching DNS records.
+* Data disks: every unpartitioned whole disk is used **and wiped on every run**. Make sure servers have no other
+  such disks, extend `garage_disk_exclude` if they do, and remove the reset steps from
+  `ansible/roles/garage/tasks/main.yml` once the cluster holds real data.
+* Add TLS in Traefik (cert-manager, or a `default` TLSStore with your certificate).
 * Data disks: see the sizing notes in [docs/s3-storage.md](docs/s3-storage.md). The local-path PVCs (WALs) live on the root disk under
   `/opt/local-path-provisioner`.
 * Retention is 7 days for all signals (`k8s/values/*.yaml`).

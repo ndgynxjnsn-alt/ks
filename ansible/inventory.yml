@@ -1,4 +1,4 @@
-# Vagrant lab. For real servers, copy this file and change addresses, user and key.
+# Vagrant lab. For real servers, copy this file and change the addresses (and put the password in ansible-vault).
 all:
   children:
     nodes:
@@ -7,8 +7,11 @@ all:
         lgtm2: { ansible_host: 192.168.56.12 }
         lgtm3: { ansible_host: 192.168.56.13 }
       vars:
-        ansible_user: vagrant
-        ansible_ssh_private_key_file: "{{ inventory_dir }}/../.vagrant/machines/{{ inventory_hostname }}/libvirt/private_key"
+        # Password login and password sudo for the admin user "ops" (created by the Vagrantfile), no SSH keys.
+        ansible_user: ops
+        ansible_password: "{{ lookup('file', inventory_dir + '/../.secrets/ops_password') }}"
+        ansible_become_password: "{{ ansible_password }}"
+        ansible_ssh_common_args: -o PubkeyAuthentication=no -o PreferredAuthentications=password
         # The lab network is isolated and has no gateway, but Kubernetes needs a default route.
         # The host bridge is used as a dead-end gateway: libvirt does not forward from isolated networks.
         default_gateway: 192.168.56.1

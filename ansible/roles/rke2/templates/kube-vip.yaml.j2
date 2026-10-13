@@ -44,7 +44,9 @@ subjects:
   name: kube-vip
   namespace: kube-system
 ---
-# Floating VIP for the Kubernetes API (6443), the RKE2 join endpoint (9345) and Traefik (80/443, hostPort).
+# kube-vip: the control-plane VIP for the Kubernetes API (6443) and the RKE2 join endpoint (9345), plus one
+# floating IP per LoadBalancer Service (address from the kube-vip.io/loadbalancerIPs annotation). Every
+# Service has its own leader election, so the IPs end up on different nodes.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -82,6 +84,8 @@ spec:
             - { name: vip_leaseduration, value: "5" }
             - { name: vip_renewdeadline, value: "3" }
             - { name: vip_retryperiod, value: "1" }
+            - { name: svc_enable, value: "true" }
+            - { name: svc_election, value: "true" }
           securityContext:
             capabilities:
               add: [NET_ADMIN, NET_RAW]
