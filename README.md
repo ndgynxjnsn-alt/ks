@@ -59,8 +59,12 @@ vagrant up                             # 3 bare VMs on isolated networks
 ansible-playbook ansible/site.yml      # offline: disks, Garage cluster + buckets, RKE2 HA + kube-vip, ./kubeconfig
 ansible-playbook ansible/lgtm.yml      # Loki, Mimir, Tempo, Pyroscope, Alloy, Grafana, ingresses
 ansible-playbook ansible/demo.yml      # build the demo image (host), load it on the nodes, deploy it
-source scripts/env.sh                  # kubectl/helm from artifacts/bin with ./kubeconfig
+source scripts/env.sh                  # kubectl/helm/k9s from artifacts/bin with ./kubeconfig
+k9s                                    # terminal UI for the cluster
 ```
+
+`./kubeconfig` talks to the API through the control-plane VIP (`https://192.168.56.10:6443`), so `kubectl` and `k9s`
+keep working when a server fails. From any directory: `KUBECONFIG=~/projects/lgtm/kubeconfig k9s`.
 
 All playbooks are idempotent. Re-run `lgtm.yml` after changing anything in `k8s/`.
 
@@ -139,7 +143,7 @@ docs/s3-storage.md               S3 storage research and decision (Garage)
 | `rke2/` | `install.sh`, `rke2.linux-amd64.tar.gz`, checksums, `rke2-images-core` + `rke2-images-canal` bundles | `INSTALL_RKE2_ARTIFACT_PATH` tarball install |
 | `images/` | every image the charts and manifests reference, found by `helm template`, pulled with `crane` as `.tar.zst` | copied to `/var/lib/rancher/rke2/agent/images/`, imported by RKE2 at start |
 | `charts/` | Helm charts, including the packaged NGDATA Mimir chart | `lgtm.yml` |
-| `bin/` | `garage`, `helm`, `kubectl`, `crane` | nodes (`garage`) and the Ansible host |
+| `bin/` | `garage`, `helm`, `kubectl`, `crane`, `k9s` | nodes (`garage`) and the Ansible host |
 | `plugins/` | Grafana Drilldown apps | baked into `lgtm.local/grafana:13.2.3-drilldown` via `crane append` |
 
 Images that exist only locally are named `lgtm.local/…` and use `imagePullPolicy: Never`. These are Grafana

@@ -5,6 +5,7 @@ local_path_provisioner_version: v0.0.37
 garage_version: v2.4.1
 helm_version: v4.3.0
 kubectl_version: v1.37.1
+k9s_version: v0.51.0
 
 charts:
   loki:      { repo: https://grafana-community.github.io/helm-charts, version: 18.15.0 } # Loki 3.7.8
