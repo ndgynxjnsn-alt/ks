@@ -61,8 +61,11 @@
           <container>
             <mainClass>org.lgtm.demo.DemoApplication</mainClass>
             <jvmFlags>
+              <!-- Order matters: the Pyroscope agent first, so its profiler is on the system classpath when the
+                   OTel agent builds its SDK and the pyroscope-otel extension looks it up (span -> profile labels). -->
+              <jvmFlag>-javaagent:/otel/pyroscope.jar</jvmFlag>
               <jvmFlag>-javaagent:/otel/opentelemetry-javaagent.jar</jvmFlag>
-              <jvmFlag>-Dotel.javaagent.extensions=/otel/pyroscope-otel-javaagent-extension.jar</jvmFlag>
+              <jvmFlag>-Dotel.javaagent.extensions=/otel/pyroscope-otel.jar</jvmFlag>
               <jvmFlag>--enable-native-access=ALL-UNNAMED</jvmFlag> <!-- async-profiler loads a native library -->
             </jvmFlags>
             <ports><port>8080</port></ports>

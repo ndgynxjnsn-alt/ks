@@ -1,5 +1,7 @@
 # Data disks are found dynamically: every whole disk without partitions or holders (the root disk has
 # partitions), sorted by name and numbered 1..N -> label garageN -> /srv/garage/dataN.
+# Disks that report a size of 0 bytes (failed or missing media) are skipped, so a dead drive doesn't stop
+# the node from coming up; Garage's replication covers the missing capacity.
 #
 # Each run REBUILDS Garage from scratch: stop, unmount, wipe metadata, force-format all data disks.
 # All S3 data is erased (accepted for this lab); the cluster tasks below then re-form the cluster.
@@ -10,6 +12,8 @@
          | rejectattr('key', 'match', garage_disk_exclude)
          | selectattr('value.partitions', 'equalto', {})
          | selectattr('value.holders', 'equalto', [])
+         | rejectattr('value.size', 'equalto', '0.00 Bytes')
+         | rejectattr('value.sectors', 'in', ['0', 0])
          | map(attribute='key') | sort }}
 
 - name: Expect at least one data disk
@@ -17,6 +21,15 @@
     that: garage_disks | length > 0
     fail_msg: No unpartitioned data disks found
     success_msg: "Data disks: {{ garage_disks | join(', ') }}"
+
+- name: Report skipped zero-size disks
+  ansible.builtin.debug:
+    msg: "Ignoring failed disk(s) reporting 0 bytes: {{ zero_disks | join(', ') }}"
+  vars:
+    zero_disks: >-
+      {{ ansible_facts.devices | dict2items | rejectattr('key', 'match', garage_disk_exclude)
+         | selectattr('value.size', 'equalto', '0.00 Bytes') | map(attribute='key') | sort }}
+  when: zero_disks | length > 0
 
 - name: Stop garage
   ansible.builtin.systemd_service: { name: garage, state: stopped }

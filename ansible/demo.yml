@@ -13,11 +13,12 @@
     - name: Create agents directory
       ansible.builtin.file: { path: "{{ app_dir }}/target/agents", state: directory, mode: "0755" }
 
-    - name: Download the OTel Java agent and the Pyroscope OTel extension
+    - name: Download the OTel Java agent, the Pyroscope Java agent and the Pyroscope OTel extension
       ansible.builtin.get_url: { url: "{{ item }}", dest: "{{ app_dir }}/target/agents/", mode: "0644" }
       loop:
         - https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v{{ otel_agent_version }}/opentelemetry-javaagent.jar
-        - https://github.com/grafana/otel-profiling-java/releases/download/v{{ pyroscope_otel_version }}/pyroscope-otel-javaagent-extension.jar
+        - https://github.com/grafana/pyroscope-java/releases/download/v{{ pyroscope_agent_version }}/pyroscope.jar
+        - https://github.com/grafana/otel-profiling-java/releases/download/v{{ pyroscope_otel_version }}/pyroscope-otel.jar
 
     - name: Build image tarball
       ansible.builtin.command: ./mvnw -q jib:buildTar -Dimage={{ demo_image }}

@@ -4,6 +4,7 @@ fullnameOverride: tempo
 replicas: 1
 
 tempo:
+  streamOverHttpEnabled: true   # streaming search for Grafana (datasource streamingEnabled)
   reportingEnabled: false
   retention: 168h
   storage:

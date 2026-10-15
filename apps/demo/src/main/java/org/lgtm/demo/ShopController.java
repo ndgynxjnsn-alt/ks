@@ -38,7 +38,7 @@ class ShopController {
         log.info("Placing order for {}", item);
 
         Map<?, ?> stock = inventory.get().uri("/api/inventory/{item}", item).retrieve().body(Map.class);
-        long price = prices.calculate(item);
+        long price = meters.timer("shop.price.calculation", "item", item).record(() -> prices.calculate(item));
 
         meters.counter("shop.orders", "item", item).increment();
         log.info("Order for {} placed, price {}", item, price);

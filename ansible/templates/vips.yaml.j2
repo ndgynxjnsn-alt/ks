@@ -1,12 +1,13 @@
 # {{ ansible_managed }}
 # One LoadBalancer Service per hostname, each with its own floating IP (kube-vip, per-service leader election).
-# The web hostnames all lead to Traefik, which routes by Host header (k8s/ingress.yaml). externalTrafficPolicy
+# All hostnames lead to Traefik (http 80 + https 443), which routes by Host header (templates/ingress.yaml.j2).
+# externalTrafficPolicy
 # Local: traffic is served by the Traefik pod on the node that currently holds the IP (no extra hop).
 apiVersion: v1
 kind: Namespace
 metadata:
   name: lgtm
-{% for name, v in service_vips.items() if name != 'garage' %}
+{% for name, v in service_vips.items() %}
 ---
 apiVersion: v1
 kind: Service
@@ -26,21 +27,15 @@ spec:
 {% endfor %}
 ---
 # Garage runs on the nodes, outside Kubernetes: a Service without selector whose endpoints are the nodes.
-# Its floating IP serves {{ service_vips.garage.host }} (ports 80 and 3900); inside the cluster the same
-# Service is the S3 endpoint {{ s3_endpoint }}.
+# In-cluster S3 endpoint {{ s3_endpoint }}; from outside via Traefik as {{ service_vips.garage.host }}.
 apiVersion: v1
 kind: Service
 metadata:
   name: garage
   namespace: lgtm
-  annotations:
-    kube-vip.io/loadbalancerIPs: "{{ service_vips.garage.ip }}"
-    lgtm/hostname: {{ service_vips.garage.host }}
 spec:
-  type: LoadBalancer
   ports:
     - { name: s3, port: 3900 }
-    - { name: http, port: 80 }
 ---
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
@@ -52,7 +47,6 @@ metadata:
 addressType: IPv4
 ports:
   - { name: s3, port: 3900, protocol: TCP }
-  - { name: http, port: 3900, protocol: TCP }
 endpoints:
 {% for host in groups['nodes'] %}
   - addresses: ["{{ hostvars[host].ansible_host }}"]

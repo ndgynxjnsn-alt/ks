@@ -1,0 +1,6 @@
+# cert-manager: requests and renews the certificates for all hostnames from the company CA
+# (ClusterIssuer in ansible/templates/tls.yaml.j2, placeholders in ansible/group_vars/all.yml).
+crds:
+  enabled: true
+prometheus:
+  enabled: false

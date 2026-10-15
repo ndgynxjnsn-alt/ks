@@ -15,6 +15,8 @@
       - ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }}
       - docker.io/rancher/local-path-provisioner:{{ local_path_provisioner_version }}
       - docker.io/library/busybox:1.37
+      # passed to the cert-manager controller as a flag (--acme-http01-solver-image), not as an image: field
+      - quay.io/jetstack/cert-manager-acmesolver:{{ charts['cert-manager'].version }}
   tasks:
     - name: Create artifact directories
       ansible.builtin.file: { path: "{{ artifacts_dir }}/{{ item }}", state: directory, mode: "0755" }
@@ -91,6 +93,7 @@
             $helm template pyroscope $c/pyroscope-{{ charts.pyroscope.version }}.tgz -f $v/pyroscope.yaml
             $helm template alloy $c/alloy-{{ charts.alloy.version }}.tgz -f $v/alloy.yaml
             $helm template grafana $c/grafana-{{ charts.grafana.version }}.tgz -f $v/grafana.yaml
+            $helm template cert-manager $c/cert-manager-{{ charts['cert-manager'].version }}.tgz -f $v/cert-manager.yaml
           } 2>/dev/null | grep -oP '^\s*(- )?image:\s*["'"'"']?\K[^"'"'"'\s]+' | sort -u
       register: chart_images
       changed_when: false

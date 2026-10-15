@@ -5,7 +5,12 @@
   connection: local
   gather_facts: false
   vars:
+    kubectl: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig"
     releases:
+      - name: cert-manager
+        namespace: cert-manager
+        chart: "cert-manager-{{ charts['cert-manager'].version }}.tgz"
+        secrets: {}
       - name: loki
         chart: "loki-{{ charts.loki.version }}.tgz"
         secrets:
@@ -31,10 +36,18 @@
   tasks:
     - name: Floating IPs per hostname (LoadBalancer Services) and the in-cluster Garage endpoint
       ansible.builtin.command:
-        cmd: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig apply -f -"
+        cmd: "{{ kubectl }} apply -f -"
         stdin: "{{ lookup('template', 'templates/vips.yaml.j2') }}"
       register: vips
       changed_when: "'configured' in vips.stdout or 'created' in vips.stdout"
+
+    - name: Grafana dashboards (ConfigMap, provisioned by the Grafana chart)
+      ansible.builtin.shell:
+        cmd: >-
+          {{ kubectl }} -n lgtm create configmap grafana-dashboards --from-file={{ repo_dir }}/k8s/dashboards
+          --dry-run=client -o yaml | {{ kubectl }} apply -f -
+      register: dashboards
+      changed_when: "'configured' in dashboards.stdout or 'created' in dashboards.stdout"
 
     # helm CLI directly: kubernetes.core.helm 6.x still calls `helm list --all`, which Helm 4 removed.
     # Secrets are passed on stdin (-f -), so they never land on disk or in the process list.
@@ -47,7 +60,7 @@
           - "{{ item.name }}"
           - "{{ artifacts_dir }}/charts/{{ item.chart }}"
           - --kubeconfig={{ repo_dir }}/kubeconfig
-          - --namespace=lgtm
+          - --namespace={{ item.namespace | default('lgtm') }}
           - --create-namespace
           - --values={{ repo_dir }}/k8s/values/{{ item.name }}.yaml
           - --values=-
@@ -57,13 +70,15 @@
       loop: "{{ releases }}"
       loop_control: { label: "{{ item.name }}" }
 
-    - name: Apply ingresses
-      ansible.builtin.command: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig apply -f {{ repo_dir }}/k8s/ingress.yaml"
+    - name: Certificate issuer (company CA) and ingresses (http + https per hostname)
+      ansible.builtin.command:
+        cmd: "{{ kubectl }} apply -f -"
+        stdin: "{{ lookup('template', 'templates/tls.yaml.j2') }}\n---\n{{ lookup('template', 'templates/ingress.yaml.j2') }}"
       register: ingress
       changed_when: "'configured' in ingress.stdout or 'created' in ingress.stdout"
 
     - name: Done
       ansible.builtin.debug:
         msg:
-          - "Grafana: http://grafana.org  user admin, password in .secrets/grafana_admin_password"
+          - "Grafana: http(s)://grafana.org  user admin, password in .secrets/grafana_admin_password"
           - "/etc/hosts: {{ service_vips.values() | map(attribute='ip') | zip(service_vips.values() | map(attribute='host')) | map('join', ' ') | list }}"

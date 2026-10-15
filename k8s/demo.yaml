@@ -1,6 +1,7 @@
 # Demo shop: "shop" generates load and calls "inventory". Both send all telemetry to Alloy:
 #   OTel Java agent  -> OTLP traces, metrics (with exemplars), logs (with trace ids) -> alloy:4318
-#   Pyroscope agent  -> CPU/alloc/lock profiles labelled with span ids               -> alloy:9999
+#   Pyroscope agent  -> CPU/alloc/lock profiles; the pyroscope-otel extension labels
+#                       them with the active span (span_id, span_name)              -> alloy:9999
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -23,6 +24,8 @@ data:
   PYROSCOPE_PROFILER_ALLOC: 512k
   PYROSCOPE_PROFILER_LOCK: 10ms
   PYROSCOPE_UPLOAD_INTERVAL: 15s
+  PYROSCOPE_LABELS: deployment_environment_name=lab
+  OTEL_PYROSCOPE_START_PROFILING: "false"   # the Pyroscope agent profiles; the extension only adds span labels
   OTEL_PYROSCOPE_ADD_PROFILE_URL: "false"
   OTEL_PYROSCOPE_ADD_PROFILE_BASELINE_URL: "false"
 ---

@@ -39,6 +39,7 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 | Tempo | 3.1.0 (chart 3.1.0) | monolithic, 1 replica (see below) |
 | Pyroscope | 2.3.2 (chart 2.3.2) | monolithic (v2 storage), 3 replicas, raft metastore |
 | Alloy | 1.20.1 (chart 1.13.1) | DaemonSet |
+| cert-manager | v1.21.2 | certificates for all hostnames from the company CA (ACME), automatic renewal |
 | Grafana | 13.2.3 (chart 13.4.0) | 1 replica, stateless, fully provisioned; image with the Drilldown apps baked in |
 
 ## Prerequisites (host)
@@ -93,11 +94,13 @@ wins most of them (in one test: 5 / 2 / 0). Elections are re-run when a node fai
 
 | URL | What |
 |---|---|
-| http://grafana.org | Grafana (`admin`, password in `.secrets/grafana_admin_password`) |
+| http(s)://grafana.org | Grafana (`admin`, password in `.secrets/grafana_admin_password`). Dashboard **LGTM → LGTM demo shop** |
 | http://grafana.org/drilldown | Metrics, Logs, Traces and Profiles Drilldown apps |
 | http://alloy.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/traces`, `/v1/metrics`, `/v1/logs`) and Pyroscope pushes (`/ingest`) from outside the cluster |
 | http://loki.org, http://mimir.org, http://tempo.org, http://pyroscope.org | Backend HTTP APIs (Pyroscope has its own UI) |
-| http://garage.org | Garage S3 API (also on port 3900) |
+| http(s)://garage.org | Garage S3 API |
+
+Every hostname is served on **http and https** (no redirect), see [TLS](#tls).
 
 Ansible generates all secrets (RKE2 token, Garage keys, Grafana password) on first use, one file each in
 `.secrets/`. Git ignores that directory.
@@ -109,7 +112,8 @@ and uses it for `become`. No SSH keys are used. On Ubuntu 26.04, the first play 
 Ubuntu still ships then takes over.
 
 **Data disks** are detected, not listed: every whole disk without partitions or holders, sorted by name, becomes
-`/srv/garage/data1..N` (label `garage1..N`). **Every `site.yml` run rebuilds Garage**: it stops it, unmounts the disks,
+`/srv/garage/data1..N` (label `garage1..N`). Disks that report a size of `0.00 Bytes` (failed or missing media) are
+skipped with a warning, so one dead drive doesn't block the node; Garage's 3× replication covers it. **Every `site.yml` run rebuilds Garage**: it stops it, unmounts the disks,
 wipes the metadata, force-formats the disks and re-forms the cluster, buckets and key. **All S3 data is erased on each run.**
 Re-run `lgtm.yml` afterwards. Loki, Mimir, Tempo and Pyroscope continue with new data.
 
@@ -124,14 +128,45 @@ ansible/download.yml             host: fetch everything into artifacts/ (the onl
 ansible/site.yml                 nodes: roles garage + rke2, fetch ./kubeconfig
 ansible/roles/garage/            detect disks → wipe + ext4 → Garage systemd service; cluster layout, key, buckets
 ansible/templates/vips.yaml.j2   per-hostname LoadBalancer Services (floating IPs), Garage endpoints
+ansible/templates/ingress.yaml.j2  http + https Ingress per hostname
+ansible/templates/tls.yaml.j2    ClusterIssuer for the company CA (placeholders in group_vars)
+k8s/dashboards/                  Grafana dashboards (ConfigMap, provisioned into folder LGTM)
 ansible/roles/rke2/              tarball install, image preload, config, kube-vip / canal / local-path manifests
 ansible/lgtm.yml                 Helm releases from artifacts/charts + ingresses
 ansible/demo.yml                 build + load + deploy the demo app
 k8s/values/*.yaml                Helm values (S3 credentials and the Grafana password are added by lgtm.yml)
-k8s/ingress.yaml                 Traefik ingresses for *.org
 k8s/demo.yaml                    demo app
 apps/demo/                       Spring Boot 4 demo app
 docs/s3-storage.md               S3 storage research and decision (Garage)
+```
+
+## TLS
+
+All hostnames answer on port 80 (http) and 443 (https). Each one has two Ingresses
+(`ansible/templates/ingress.yaml.j2`): one on Traefik's `web` entrypoint and one on `websecure` with a `tls:` block.
+**cert-manager** requests a certificate per hostname from the **company CA** and renews it automatically
+(by default when a third of its lifetime is left).
+
+The issuer (`ansible/templates/tls.yaml.j2`) is a `ClusterIssuer` of type **ACME** with the **HTTP-01** challenge.
+The CA fetches a token from `http://<host>/.well-known/acme-challenge/…`, which cert-manager publishes through a
+temporary Traefik route. That's why plain http stays enabled.
+
+> **Placeholders, untested.** Set the real values in `ansible/group_vars/all.yml` → `tls_issuer` (`acme_server`,
+> `email`, optionally `ca_bundle_file` with the company root CA in PEM), then re-run `ansible-playbook ansible/lgtm.yml`.
+> Until then the ClusterIssuer reports `ErrRegisterACMEAccount` (it can't reach `ca.example.corp`), the
+> Certificates stay pending, and https is served with Traefik's self-signed default certificate.
+
+Requirements on the company side:
+
+* The CA must reach the hostnames on port 80 (HTTP-01). If it can't, switch the solver to `dns01` with your DNS
+  provider.
+* If the CA has no ACME interface (e.g. plain Microsoft AD CS), replace `spec.acme` with the matching
+  cert-manager issuer: `vault` (HashiCorp Vault PKI), `venafi`, or `ca` (an intermediate CA key pair in a Secret).
+* Clients need the company root CA in their trust store, which they normally already have.
+
+```bash
+kubectl get clusterissuer company-ca                  # Ready = True once the CA is reachable
+kubectl -n lgtm get certificate                       # one per hostname, READY = True when issued
 ```
 
 ## Offline installation
@@ -146,6 +181,14 @@ docs/s3-storage.md               S3 storage research and decision (Garage)
 | `bin/` | `garage`, `helm`, `kubectl`, `crane`, `k9s` | nodes (`garage`) and the Ansible host |
 | `plugins/` | Grafana Drilldown apps | baked into `lgtm.local/grafana:13.2.3-drilldown` via `crane append` |
 
+To ship new or updated images to a running cluster (for example after changing a chart version) without the
+Garage reset that a full `site.yml` run does:
+
+```bash
+ansible-playbook ansible/download.yml
+ansible-playbook ansible/site.yml --tags images     # copy + import into containerd on every node
+```
+
 Images that exist only locally are named `lgtm.local/…` and use `imagePullPolicy: Never`. These are Grafana
 with the plugins and the demo app. Everything else uses `IfNotPresent` with pinned tags, so kubelet never
 contacts a registry.
@@ -156,15 +199,38 @@ contacts a registry.
 demo app ── OTel Java agent ── OTLP/HTTP ─▶ Alloy :4318 ─┬─▶ Tempo     (traces)
          │   (traces, metrics + exemplars,                ├─▶ Mimir /otlp (metrics, exemplars)
          │    logs with trace_id/span_id)                 └─▶ Loki  /otlp (logs, structured metadata)
-         └─ Pyroscope agent (in the OTel extension) ─▶ Alloy :9999 ─▶ Pyroscope (profiles with span_id)
+         └─ Pyroscope Java agent (+ OTel extension) ─▶ Alloy :9999 ─▶ Pyroscope (profiles with span_id)
 all pods' stdout (except demo) ── Alloy (/var/log/pods) ─▶ Loki
 Tempo metrics-generator (service graph, span metrics) ──▶ Mimir
 Loki · Mimir · Tempo · Pyroscope ──▶ Garage S3 (via VIP :3900)
 ```
 
-Grafana's datasources are linked to each other:
-trace → logs (by trace id), trace → metrics, trace → CPU profile of the span, metric exemplar → trace,
-log line → trace (`trace_id` structured metadata), and Tempo's service map from Mimir.
+### Correlation in Grafana
+
+All four signals share the same labels: `service_name` and `deployment_environment_name`.
+* Logs and profiles get them natively.
+* Mimir promotes the OTel resource attributes `service.name`, `deployment.environment.name`, … to metric labels.
+* Tempo's span metrics use `service`.
+
+The datasources (`k8s/values/grafana.yaml`) link the signals:
+
+| From | To | How |
+|---|---|---|
+| metric (latency histogram) | trace | exemplars with `trace_id` (◆ in panels) |
+| log line | trace | `trace_id` structured metadata → derived field "View trace" |
+| trace span | logs | `{service_name="<service.name>"} \| trace_id="<id>"` |
+| trace span | metrics | Tempo span metrics: request rate, error rate, p95 of the span |
+| trace span | CPU profile | flame graph of exactly that span (`span_id` labels from the Pyroscope OTel extension) |
+| traces | service map | Tempo's service graph metrics in Mimir |
+
+The provisioned dashboard **LGTM demo shop — observability showcase** (`k8s/dashboards/lgtm-demo.json`) combines
+golden signals, exemplars, a custom Micrometer metric, logs, a trace table, the service graph and a CPU flame
+graph. Its panels have data links to the flame graph for the selected time range. Drilldown apps: http://grafana.org/drilldown.
+
+**Log volume:** Loki's `/loki/api/v1/drilldown-limits` endpoint ignores `auth_enabled: false` and returns
+`401 no org id` without a tenant header. Logs Drilldown reads `volume_enabled` there and, on *any* error, shows
+"Log volume has not been configured." The Loki datasource therefore sends `X-Scope-OrgID: fake`, the tenant Loki
+uses internally in single-tenant mode.
 
 ### The demo app
 
@@ -181,9 +247,13 @@ Instrumentation:
 * **OTel API bridge**: the app only depends on `opentelemetry-instrumentation-annotations`.
   `@WithSpan`, `@SpanAttribute` and `Span.current()` are bridged into the agent's SDK at runtime. Micrometer
   meters (`shop.orders`) are bridged to OTel metrics through `OTEL_INSTRUMENTATION_MICROMETER_ENABLED`.
-* **Pyroscope**: the `pyroscope-otel-javaagent-extension` 2.1.4 (Grafana's otel-profiling-java) bundles the
-  Pyroscope Java agent and starts it. It also labels CPU samples with span ids, which enables
-  "Profiles for this span" in Tempo.
+* **Pyroscope Java agent** 2.9.2 (`-javaagent:pyroscope.jar`): CPU, allocation and lock profiles.
+* **Pyroscope OTel extension** 2.1.4 (`pyroscope-otel.jar`, loaded with `-Dotel.javaagent.extensions`): labels the
+  profiles with the active span (`span_id`, `span_name`), which enables "Profiles for this span" in Tempo.
+  **Agent order matters:** `pyroscope.jar` comes before the OTel agent, so the profiler is on the system classpath when
+  the OTel agent builds its SDK and the extension looks it up (`OTEL_PYROSCOPE_START_PROFILING=false`: the
+  agent profiles, the extension only adds labels).
+* **Micrometer timer** `shop.price.calculation` is bridged to the OTLP histogram `shop_price_calculation_seconds`.
 
 ## Fault tolerance
 
@@ -217,7 +287,7 @@ Notes:
 * Data disks: every unpartitioned whole disk is used **and wiped on every run**. Make sure servers have no other
   such disks, extend `garage_disk_exclude` if they do, and remove the reset steps from
   `ansible/roles/garage/tasks/main.yml` once the cluster holds real data.
-* Add TLS in Traefik (cert-manager, or a `default` TLSStore with your certificate).
+* TLS: fill in the company CA placeholders (see [TLS](#tls)).
 * Data disks: see the sizing notes in [docs/s3-storage.md](docs/s3-storage.md). The local-path PVCs (WALs) live on the root disk under
   `/opt/local-path-provisioner`.
 * Retention is 7 days for all signals (`k8s/values/*.yaml`).

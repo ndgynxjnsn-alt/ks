@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+# The company CA as certificate issuer. ACME with the HTTP-01 challenge: the CA fetches a token from
+# http://<host>/.well-known/acme-challenge/ (cert-manager adds a temporary Traefik route for it).
+# If the company CA does not speak ACME, replace spec.acme with the matching issuer type, e.g.
+# spec.vault (HashiCorp Vault PKI), spec.venafi, or spec.ca (CA key pair in a Secret).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ tls_issuer.name }}
+spec:
+  acme:
+    server: {{ tls_issuer.acme_server }}
+    email: {{ tls_issuer.email }}
+{% if tls_issuer.ca_bundle_file %}
+    caBundle: {{ lookup('file', tls_issuer.ca_bundle_file) | b64encode }}
+{% endif %}
+    privateKeySecretRef:
+      name: {{ tls_issuer.name }}-acme-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

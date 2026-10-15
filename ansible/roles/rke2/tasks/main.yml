@@ -22,17 +22,30 @@
 
 - name: Create directories
   ansible.builtin.file: { path: "{{ item }}", state: directory, mode: "0755" }
+  tags: [images]
   loop: [/root/rke2-artifacts, /etc/rancher/rke2, "{{ rke2_images_dir }}", /var/lib/rancher/rke2/server/manifests]
 
 - name: Copy RKE2 tarball and install script
   ansible.builtin.copy: { src: "{{ artifacts_dir }}/rke2/{{ item }}", dest: /root/rke2-artifacts/, mode: "0644" }
   loop: [install.sh, rke2.linux-amd64.tar.gz, sha256sum-amd64.txt]
 
-# RKE2 imports every archive in agent/images at start (and watches the directory afterwards).
+# RKE2 imports every archive in agent/images at start. To ship new images to a running cluster without
+# touching anything else:  ansible-playbook ansible/site.yml --tags images
 - name: Preload container images
   ansible.builtin.copy: { src: "{{ item }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
   loop: "{{ query('fileglob', artifacts_dir + '/rke2/rke2-images-*.tar.zst') + query('fileglob', artifacts_dir + '/images/*.tar.zst') }}"
   loop_control: { label: "{{ item | basename }}" }
+  register: preloaded
+  tags: [images]
+
+- name: Import new images into the running containerd
+  ansible.builtin.shell: >-
+    zstd -dc {{ rke2_images_dir }}/{{ item.item | basename }} |
+    /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import -
+  loop: "{{ preloaded.results | selectattr('changed') | list }}"
+  loop_control: { label: "{{ item.item | basename }}" }
+  failed_when: false   # containerd is not running yet on a fresh node; RKE2 imports the files at start
+  tags: [images]
 
 - name: Install RKE2 from the tarball
   ansible.builtin.command: sh /root/rke2-artifacts/install.sh
