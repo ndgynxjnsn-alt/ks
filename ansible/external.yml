@@ -1,0 +1,78 @@
+# Services outside the cluster on the Ansible host (external/docker-compose.yml):
+#   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
+# Renders their configs (with secrets) into external/.generated/ and starts them with sudo docker compose.
+#   ansible-playbook ansible/external.yml -K
+- name: External services (Keycloak, Pebble)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    gen: "{{ repo_dir }}/external/.generated"
+  tasks:
+    - name: Directories for generated configs
+      ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }
+      loop: [keycloak, pebble]
+
+    # Pebble's ACME API speaks TLS. cert-manager reaches it by IP, so the certificate needs an IP SAN; the CA
+    # below is what tls_issuer.ca_bundle_file points to.
+    - name: CA and TLS certificate for the ACME endpoint
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=LGTM lab ACME endpoint CA" \
+            -keyout acme-ca.key -out acme-ca.crt 2>/dev/null
+          openssl req -newkey rsa:2048 -nodes -subj "/CN={{ external_host_ip }}" \
+            -keyout acme.key -out acme.csr 2>/dev/null
+          printf 'subjectAltName=IP:%s,DNS:acme.org,DNS:localhost\nextendedKeyUsage=serverAuth\n' \
+            "{{ external_host_ip }}" > acme.ext
+          openssl x509 -req -in acme.csr -CA acme-ca.crt -CAkey acme-ca.key -CAcreateserial -days 3650 \
+            -extfile acme.ext -out acme.crt 2>/dev/null
+          chmod 0644 acme.key acme.crt acme-ca.crt   # read by the pebble container user
+          rm -f acme.csr acme.ext
+        chdir: "{{ gen }}/pebble"
+        creates: "{{ gen }}/pebble/acme.crt"
+
+    - name: Pebble configuration (EAB key id + HMAC key from tls_issuer)
+      ansible.builtin.template:
+        src: templates/external/pebble-config.json.j2
+        dest: "{{ gen }}/pebble/pebble-config.json"
+        mode: "0644"
+      register: pebble_config
+
+    - name: Keycloak realm (client, groups, users)
+      ansible.builtin.template:
+        src: templates/external/keycloak-realm.json.j2
+        dest: "{{ gen }}/keycloak/lgtm-realm.json"
+        mode: "0644"
+
+    - name: Keycloak admin credentials
+      ansible.builtin.copy:
+        dest: "{{ gen }}/keycloak.env"
+        mode: "0600"
+        content: |
+          KC_BOOTSTRAP_ADMIN_USERNAME=admin
+          KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
+
+    - name: Start the containers
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ repo_dir }}/external"
+      become: true
+      register: compose
+      changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
+
+    # the realm is only imported when it doesn't exist; config changes of Pebble need a restart
+    - name: Restart Pebble after a config change
+      ansible.builtin.command:
+        cmd: docker compose restart pebble
+        chdir: "{{ repo_dir }}/external"
+      become: true
+      when: pebble_config.changed
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "/etc/hosts on this machine:  {{ external_host_ip }} {{ oauth.hostname }}"
+          - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
+          - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }} (passwords in .secrets/keycloak_user_<name>)"
+          - "Then: ansible-playbook ansible/lgtm.yml  (ClusterIssuer with EAB, Grafana OAuth)"

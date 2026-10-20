@@ -1,8 +1,19 @@
 # {{ ansible_managed }}
-# The company CA as certificate issuer. ACME with the HTTP-01 challenge: the CA fetches a token from
-# http://<host>/.well-known/acme-challenge/ (cert-manager adds a temporary Traefik route for it).
-# If the company CA does not speak ACME, replace spec.acme with the matching issuer type, e.g.
-# spec.vault (HashiCorp Vault PKI), spec.venafi, or spec.ca (CA key pair in a Secret).
+# The company CA as certificate issuer: ACME with External Account Binding (EAB). The CA hands out a key id
+# (eab_kid) and an HMAC key (eab_hmac_key, base64url); cert-manager signs its ACME account registration with
+# them, so only accounts bound to that external account get certificates. Challenge: HTTP-01, the CA fetches
+# a token from http://<host>/.well-known/acme-challenge/ (cert-manager adds a temporary Traefik route).
+# Lab: the CA is Pebble from external/ (ansible/external.yml). Settings: tls_issuer in group_vars.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ tls_issuer.name }}-eab
+  namespace: cert-manager        # ClusterIssuer secrets live in cert-manager's cluster resource namespace
+  labels: { lgtm/set: tls }
+type: Opaque
+stringData:
+  hmac-key: "{{ tls_issuer.eab_hmac_key }}"
+---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -12,9 +23,15 @@ spec:
   acme:
     server: {{ tls_issuer.acme_server }}
     email: {{ tls_issuer.email }}
-{% if tls_issuer.ca_bundle_file %}
+{% if tls_issuer.ca_bundle_file and tls_issuer.ca_bundle_file is file %}
+    # CA of the ACME server's own TLS certificate
     caBundle: {{ lookup('file', tls_issuer.ca_bundle_file) | b64encode }}
 {% endif %}
+    externalAccountBinding:
+      keyID: {{ tls_issuer.eab_kid }}
+      keySecretRef:
+        name: {{ tls_issuer.name }}-eab
+        key: hmac-key
     privateKeySecretRef:
       name: {{ tls_issuer.name }}-acme-account
     solvers:

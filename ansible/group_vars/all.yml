@@ -68,19 +68,46 @@ service_vips:
 # In-cluster S3 endpoint: Service "garage" whose endpoints are the Garage daemons on the nodes.
 s3_endpoint: garage.lgtm.svc:3900
 
+# ---------------------------------------------------------------- services outside the cluster (external/)
+# Keycloak (OAuth for Grafana) and Pebble (a small ACME server standing in for the company CA) run with
+# docker-compose on the Ansible host: ansible-playbook ansible/external.yml -K
+external_host_ip: 192.168.56.1     # the Ansible host on the lab network, reachable from the nodes
+keycloak_version: 26.8.1
+pebble_version: 2.10.1
+
 # ---------------------------------------------------------------- TLS
 # Every hostname is served on http (80) and https (443). cert-manager requests the certificates from the
-# company CA via ACME (HTTP-01 challenge over port 80) and renews them automatically (default: 1/3 of the
-# lifetime before expiry). Until the CA is reachable, Traefik answers https with its self-signed default cert.
+# company CA via ACME with External Account Binding (the CA hands out a key id + HMAC key) and the HTTP-01
+# challenge over port 80, and renews them automatically (default: 1/3 of the lifetime before expiry).
+# Until a certificate is issued, Traefik answers https with its self-signed default certificate.
 #
-# >>> PLACEHOLDERS: replace with the values of your company CA <<<
+# Lab values point at Pebble from external/. For the company CA replace acme_server, email, eab_kid and
+# eab_hmac_key (e.g. in ansible-vault) and set ca_bundle_file to its root CA (or "" if publicly trusted).
 tls_issuer:
   name: company-ca
-  acme_server: https://ca.example.corp/acme/acme/directory   # ACME directory URL of the company CA
+  acme_server: "https://{{ external_host_ip }}:14000/dir"     # ACME directory URL
   email: observability@example.corp                          # ACME account contact
-  # PEM of the company root CA (path on the Ansible host). Lets cert-manager trust the ACME server's TLS.
-  # Leave empty if the ACME endpoint uses a publicly trusted certificate.
-  ca_bundle_file: ""
+  eab_kid: lgtm-observability                                # EAB key id issued by the CA
+  eab_hmac_key: "{{ lookup('password', secrets_dir + '/acme_eab_hmac_key chars=ascii_letters,digits length=64') }}"
+  # PEM of the CA that signed the ACME server's TLS certificate (path on the Ansible host)
+  ca_bundle_file: "{{ repo_dir }}/external/.generated/pebble/acme-ca.crt"
+
+# ---------------------------------------------------------------- OAuth (Grafana <-> Keycloak)
+# Users and groups live in the Keycloak realm (ansible/templates/external/keycloak-realm.json.j2).
+# Group -> Grafana org/role:  grafana-admins -> Grafana server admin + Admin in all orgs,
+#                             tenant-<name>  -> Editor in the org of that tenant
+oauth:
+  enabled: true
+  hostname: keycloak.org                       # resolved to external_host_ip (hosts file / pod hostAliases)
+  issuer: http://keycloak.org:8080/realms/lgtm
+  client_id: grafana
+oauth_client_secret: "{{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}"
+keycloak_admin_password: "{{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}"
+# lab users of the realm (password files in .secrets/keycloak_user_<name>)
+keycloak_users:
+  - { name: admin-user, email: admin@example.corp, groups: [grafana-admins] }
+  - { name: alice, email: alice@example.corp, groups: [tenant-demo] }
+  - { name: bob, email: bob@example.corp, groups: [tenant-platform] }
 
 # ---------------------------------------------------------------- paths on the Ansible host
 repo_dir: "{{ playbook_dir | dirname }}"

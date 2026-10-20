@@ -36,14 +36,47 @@
         secrets: {}
       - name: grafana
         chart: "grafana-{{ charts.grafana.version }}.tgz"
-        secrets:
-          adminPassword: "{{ grafana_admin_password }}"
-          # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
+        secrets: "{{ grafana_overlay | combine(grafana_oauth_overlay if oauth.enabled else {}, recursive=true) }}"
+    grafana_overlay:
+          adminPassword: "{{ grafana_admin_password }}"          # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
           datasources:
             datasources.yaml:
               apiVersion: 1
               datasources: "{{ lookup('template', 'templates/grafana-datasources.yaml.j2',
                                template_vars={'ds_tenants': tenants | map(attribute='name') | list, 'ds_dollar': '$$'}) | from_yaml }}"
+    # Login via Keycloak (external/). Keycloak group -> Grafana org/role:
+    #   grafana-admins -> Admin in every org + Grafana server admin;  tenant-<name> -> Editor in org <name>
+    # auto_assign_org is off, so tenant users don't land in the Main org (which sees all tenants).
+    grafana_oauth_overlay:
+      hostAliases:
+        - { ip: "{{ external_host_ip }}", hostnames: ["{{ oauth.hostname }}"] }
+      envValueFrom:
+        GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+          secretKeyRef: { name: grafana-oauth, key: client-secret }
+      grafana.ini:
+        users:
+          auto_assign_org: false
+        auth.generic_oauth:
+          enabled: true
+          name: Keycloak
+          allow_sign_up: true
+          client_id: "{{ oauth.client_id }}"
+          scopes: openid email profile
+          use_pkce: true
+          auth_url: "{{ oauth.issuer }}/protocol/openid-connect/auth"
+          token_url: "{{ oauth.issuer }}/protocol/openid-connect/token"
+          api_url: "{{ oauth.issuer }}/protocol/openid-connect/userinfo"
+          signout_redirect_url: "{{ oauth.issuer }}/protocol/openid-connect/logout?client_id={{ oauth.client_id }}&post_logout_redirect_uri=https%3A%2F%2F{{ service_vips.grafana.host }}%2Flogin"
+          login_attribute_path: preferred_username
+          email_attribute_path: email
+          name_attribute_path: name
+          groups_attribute_path: groups
+          role_attribute_path: "contains(groups[*], 'grafana-admins') && 'GrafanaAdmin' || 'Viewer'"
+          allow_assign_grafana_admin: true
+          org_attribute_path: groups
+          org_mapping: >-
+            grafana-admins:*:Admin
+            {% for t in tenants %}tenant-{{ t.name }}:{{ t.name }}:Editor {% endfor %}
   tasks:
     - name: Floating IPs per hostname (LoadBalancer Services) and the in-cluster Garage endpoint
       ansible.builtin.include_tasks: tasks/apply-set.yml
@@ -80,6 +113,14 @@
         stdin: "{{ item.secrets | to_nice_yaml }}"
       loop: "{{ releases | rejectattr('name', 'equalto', 'grafana') }}"
       loop_control: { label: "{{ item.name }}" }
+
+    - name: OAuth client secret for Grafana
+      ansible.builtin.include_tasks: tasks/apply-set.yml
+      vars:
+        set_name: oauth
+        set_kinds: [secrets]
+        manifest: "{{ lookup('template', 'templates/oauth.yaml.j2') }}"
+      when: oauth.enabled
 
     - name: PostgreSQL cluster for Grafana (CloudNativePG)
       ansible.builtin.include_tasks: tasks/apply-set.yml

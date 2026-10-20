@@ -1,0 +1,66 @@
+{
+  "realm": "lgtm",
+  "enabled": true,
+  "displayName": "LGTM observability",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "groups": [
+    { "name": "grafana-admins" }{% for t in tenants %},
+    { "name": "tenant-{{ t.name }}" }{% endfor %}
+
+  ],
+  "clients": [
+    {
+      "clientId": "{{ oauth.client_id }}",
+      "name": "Grafana",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ oauth_client_secret }}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "rootUrl": "https://{{ service_vips.grafana.host }}",
+      "redirectUris": [
+        "https://{{ service_vips.grafana.host }}/login/generic_oauth",
+        "http://{{ service_vips.grafana.host }}/login/generic_oauth"
+      ],
+      "webOrigins": ["https://{{ service_vips.grafana.host }}", "http://{{ service_vips.grafana.host }}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://{{ service_vips.grafana.host }}/login##http://{{ service_vips.grafana.host }}/login"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+{% for u in keycloak_users %}
+    {
+      "username": "{{ u.name }}",
+      "email": "{{ u.email }}",
+      "emailVerified": true,
+      "firstName": "{{ u.name | capitalize }}",
+      "lastName": "Lab",
+      "enabled": true,
+      "groups": {{ u.groups | to_json }},
+      "credentials": [
+        { "type": "password", "temporary": false,
+          "value": "{{ lookup('password', secrets_dir + '/keycloak_user_' + u.name + ' chars=ascii_letters,digits length=16') }}" }
+      ]
+    }{{ '' if loop.last else ',' }}
+{% endfor %}
+  ]
+}
