@@ -35,11 +35,11 @@
         secrets: { adminPassword: "{{ grafana_admin_password }}" }
   tasks:
     - name: Floating IPs per hostname (LoadBalancer Services) and the in-cluster Garage endpoint
-      ansible.builtin.command:
-        cmd: "{{ kubectl }} apply -f -"
-        stdin: "{{ lookup('template', 'templates/vips.yaml.j2') }}"
-      register: vips
-      changed_when: "'configured' in vips.stdout or 'created' in vips.stdout"
+      ansible.builtin.include_tasks: tasks/apply-set.yml
+      vars:
+        set_name: vips
+        set_kinds: [services, endpointslices]
+        manifest: "{{ lookup('template', 'templates/vips.yaml.j2') }}"
 
     - name: Grafana dashboards (ConfigMap, provisioned by the Grafana chart)
       ansible.builtin.shell:
@@ -70,12 +70,19 @@
       loop: "{{ releases }}"
       loop_control: { label: "{{ item.name }}" }
 
-    - name: Certificate issuer (company CA) and ingresses (http + https per hostname)
-      ansible.builtin.command:
-        cmd: "{{ kubectl }} apply -f -"
-        stdin: "{{ lookup('template', 'templates/tls.yaml.j2') }}\n---\n{{ lookup('template', 'templates/ingress.yaml.j2') }}"
-      register: ingress
-      changed_when: "'configured' in ingress.stdout or 'created' in ingress.stdout"
+    - name: Certificate issuer (company CA)
+      ansible.builtin.include_tasks: tasks/apply-set.yml
+      vars:
+        set_name: tls
+        set_kinds: [clusterissuers, secrets]
+        manifest: "{{ lookup('template', 'templates/tls.yaml.j2') }}"
+
+    - name: Ingresses (http + https per hostname)
+      ansible.builtin.include_tasks: tasks/apply-set.yml
+      vars:
+        set_name: ingress
+        set_kinds: [ingresses]
+        manifest: "{{ lookup('template', 'templates/ingress.yaml.j2') }}"
 
     - name: Done
       ansible.builtin.debug:

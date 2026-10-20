@@ -11,7 +11,8 @@
   'alloy':     [('/v1/', 'alloy', 4318), ('/ingest', 'alloy', 9999), ('/', 'alloy', 12345)],
   'garage':    [('/', 'garage', 3900)],
 } %}
-{% for name, paths in routes.items() %}
+{# only hostnames that exist in service_vips (commenting one out there removes its ingresses) #}
+{% for name, paths in routes.items() if name in service_vips %}
 {% for scheme in ['http', 'https'] %}
 ---
 apiVersion: networking.k8s.io/v1
@@ -19,6 +20,7 @@ kind: Ingress
 metadata:
   name: {{ name }}-{{ scheme }}
   namespace: lgtm
+  labels: { lgtm/set: ingress }
   annotations:
 {% if scheme == 'http' %}
     traefik.ingress.kubernetes.io/router.entrypoints: web

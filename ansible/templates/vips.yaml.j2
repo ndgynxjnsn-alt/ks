@@ -14,6 +14,7 @@ kind: Service
 metadata:
   name: vip-{{ name }}
   namespace: kube-system
+  labels: { lgtm/set: vips }
   annotations:
     kube-vip.io/loadbalancerIPs: "{{ v.ip }}"
     lgtm/hostname: {{ v.host }}
@@ -33,6 +34,7 @@ kind: Service
 metadata:
   name: garage
   namespace: lgtm
+  labels: { lgtm/set: vips }
 spec:
   ports:
     - { name: s3, port: 3900 }
@@ -44,6 +46,7 @@ metadata:
   namespace: lgtm
   labels:
     kubernetes.io/service-name: garage
+    lgtm/set: vips
 addressType: IPv4
 ports:
   - { name: s3, port: 3900, protocol: TCP }

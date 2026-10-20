@@ -24,23 +24,43 @@
       ansible.builtin.command: ./mvnw -q jib:buildTar -Dimage={{ demo_image }}
       args: { chdir: "{{ app_dir }}" }
 
-- name: Load the image on every node
+    # Image ID = sha256 of the image config; Jib builds are reproducible, so unchanged code -> same ID.
+    - name: Image ID of the new build
+      ansible.builtin.shell: >-
+        set -o pipefail; t={{ app_dir }}/target/jib-image.tar;
+        tar -xOf $t "$(tar -xOf $t manifest.json | jq -r '.[0].Config')" | sha256sum | cut -d' ' -f1
+      args: { executable: /bin/bash }
+      register: built
+      changed_when: false
+
+- name: Load the image on every node (only if it changed)
   hosts: nodes
   become: true
   gather_facts: false
+  vars:
+    built_id: "sha256:{{ hostvars['localhost'].built.stdout }}"
   tasks:
-    - name: Copy image tarball
-      ansible.builtin.copy:
-        src: "{{ repo_dir }}/apps/demo/target/jib-image.tar"
-        dest: /var/lib/rancher/rke2/agent/images/demo.tar
-        mode: "0644"
-      register: demo_tar
-
-    - name: Import image into containerd
+    - name: Image ID on the node
       ansible.builtin.command: >-
-        /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io
-        images import /var/lib/rancher/rke2/agent/images/demo.tar
-      when: demo_tar.changed
+        /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock
+        inspecti -o go-template --template '{{ '{{' }}.status.id{{ '}}' }}' {{ demo_image }}
+      register: node_image
+      changed_when: false
+      failed_when: false
+
+    - name: Copy and import the image
+      when: node_image.stdout | trim != built_id
+      block:
+        - name: Copy image tarball
+          ansible.builtin.copy:
+            src: "{{ repo_dir }}/apps/demo/target/jib-image.tar"
+            dest: /var/lib/rancher/rke2/agent/images/demo.tar
+            mode: "0644"
+
+        - name: Import image into containerd
+          ansible.builtin.command: >-
+            /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io
+            images import /var/lib/rancher/rke2/agent/images/demo.tar
 
 - name: Deploy the demo app
   hosts: localhost
@@ -48,12 +68,19 @@
   gather_facts: false
   vars:
     kubectl: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig"
+    image_changed: >-
+      {{ groups['nodes'] | map('extract', hostvars, ['node_image', 'stdout'])
+         | map('trim') | reject('equalto', 'sha256:' ~ built.stdout) | list | length > 0 }}
   tasks:
     - name: Apply manifests
       ansible.builtin.command: "{{ kubectl }} apply -f {{ repo_dir }}/k8s/demo.yaml"
+      register: applied
+      changed_when: "'configured' in applied.stdout or 'created' in applied.stdout"
 
+    # same tag, new content: pods only pick it up when restarted
     - name: Restart deployments to pick up the new image
       ansible.builtin.command: "{{ kubectl }} -n demo rollout restart deployment"
+      when: image_changed | bool
 
     - name: Wait for rollout
       ansible.builtin.command: "{{ kubectl }} -n demo rollout status deployment --timeout 5m"

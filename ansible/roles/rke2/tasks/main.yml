@@ -29,22 +29,41 @@
   ansible.builtin.copy: { src: "{{ artifacts_dir }}/rke2/{{ item }}", dest: /root/rke2-artifacts/, mode: "0644" }
   loop: [install.sh, rke2.linux-amd64.tar.gz, sha256sum-amd64.txt]
 
-# RKE2 imports every archive in agent/images at start. To ship new images to a running cluster without
-# touching anything else:  ansible-playbook ansible/site.yml --tags images
-- name: Preload container images
+# RKE2 imports every archive in agent/images at start. Archives are only copied (and imported into a running
+# containerd) when their image is not on the node yet, so re-runs don't move gigabytes around.
+# Ship new images to a running cluster without touching anything else:  site.yml --tags images
+- name: RKE2 air-gap bundles
   ansible.builtin.copy: { src: "{{ item }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
-  loop: "{{ query('fileglob', artifacts_dir + '/rke2/rke2-images-*.tar.zst') + query('fileglob', artifacts_dir + '/images/*.tar.zst') }}"
+  loop: "{{ query('fileglob', artifacts_dir + '/rke2/rke2-images-*.tar.zst') }}"
   loop_control: { label: "{{ item | basename }}" }
+  tags: [images]
+
+- name: Images already in containerd
+  ansible.builtin.command: >-
+    /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock images -o json
+  register: crictl_images
+  changed_when: false
+  failed_when: false   # fresh node: RKE2 (and containerd) not installed or not running yet
+  tags: [images]
+
+- name: Copy missing image archives
+  ansible.builtin.copy: { src: "{{ artifacts_dir }}/images/{{ item.file }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
+  loop: "{{ lookup('file', artifacts_dir + '/images/index.yml') | from_yaml | rejectattr('ref', 'in', present_images) }}"
+  loop_control: { label: "{{ item.ref }}" }
+  vars:
+    present_images: >-
+      {{ ((crictl_images.stdout | from_json).images | map(attribute='repoTags') | flatten)
+         if crictl_images.rc == 0 else [] }}
   register: preloaded
   tags: [images]
 
-- name: Import new images into the running containerd
+- name: Import copied images into the running containerd
   ansible.builtin.shell: >-
-    zstd -dc {{ rke2_images_dir }}/{{ item.item | basename }} |
+    zstd -dc {{ rke2_images_dir }}/{{ item.item.file }} |
     /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import -
   loop: "{{ preloaded.results | selectattr('changed') | list }}"
-  loop_control: { label: "{{ item.item | basename }}" }
-  failed_when: false   # containerd is not running yet on a fresh node; RKE2 imports the files at start
+  loop_control: { label: "{{ item.item.ref }}" }
+  when: crictl_images.rc == 0
   tags: [images]
 
 - name: Install RKE2 from the tarball

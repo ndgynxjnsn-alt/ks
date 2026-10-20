@@ -1,0 +1,24 @@
+# Applies a rendered manifest as a named "set" and deletes objects of that set that are no longer rendered
+# (e.g. a hostname removed from service_vips). Every object in the manifest must carry the label
+# lgtm/set: <set_name>.   Vars: set_name, manifest (YAML string), set_kinds (kubectl resource names)
+- name: "Apply {{ set_name }}"
+  ansible.builtin.command:
+    cmd: "{{ kubectl }} apply -f -"
+    stdin: "{{ manifest }}"
+  register: applied
+  changed_when: "'configured' in applied.stdout or 'created' in applied.stdout"
+
+- name: "List objects of {{ set_name }} in the cluster"
+  ansible.builtin.command: "{{ kubectl }} get {{ set_kinds | join(',') }} -A -l lgtm/set={{ set_name }} -o json"
+  register: existing
+  changed_when: false
+
+- name: "Delete objects no longer part of {{ set_name }}"
+  ansible.builtin.command: "{{ kubectl }} -n {{ item.metadata.namespace }} delete {{ item.kind }} {{ item.metadata.name }}"
+  loop: "{{ (existing.stdout | from_json)['items'] }}"
+  loop_control: { label: "{{ item.kind }}/{{ item.metadata.namespace }}/{{ item.metadata.name }}" }
+  when: (item.kind ~ '/' ~ item.metadata.name) not in wanted
+  vars:
+    wanted: >-
+      {{ manifest | from_yaml_all | select | map(attribute='kind')
+         | zip(manifest | from_yaml_all | select | map(attribute='metadata.name')) | map('join', '/') | list }}
