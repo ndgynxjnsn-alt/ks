@@ -39,8 +39,13 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 | Tempo | 3.1.0 (chart 3.1.0) | monolithic, 1 replica (see below) |
 | Pyroscope | 2.3.2 (chart 2.3.2) | monolithic (v2 storage), 3 replicas, raft metastore |
 | Alloy | 1.20.1 (chart 1.13.1) | DaemonSet |
-| cert-manager | v1.21.2 | certificates for all hostnames from the company CA (ACME), automatic renewal |
-| Grafana | 13.2.3 (chart 13.4.0) | 1 replica, stateless, fully provisioned; image with the Drilldown apps baked in |
+| cert-manager | v1.21.2 | certificates for all hostnames from the company CA (ACME with External Account Binding), automatic renewal |
+| Grafana | 13.2.3 (chart 13.4.0) | 2 replicas on PostgreSQL, one org per tenant, OAuth via Keycloak; image with the Drilldown apps baked in |
+| CloudNativePG | operator 1.30.1 (chart 0.29.1), PostgreSQL 18.6 | Grafana's database, 3 instances (primary + 2 replicas), automatic failover |
+| Keycloak | 26.8.1 | outside the cluster (docker-compose on the Ansible host): OAuth/OIDC login for Grafana |
+| Pebble | 2.10.1 | outside the cluster: small ACME server with EAB, the lab's stand-in for the company CA |
+
+All backends are **multi-tenant** (`X-Scope-OrgID`), see [Tenants](#tenants).
 
 ## Prerequisites (host)
 
@@ -50,7 +55,9 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 * Ansible ≥ 2.16 with the collections `ansible.posix`, `community.general` and `kubernetes.core`, plus `zstd`, `unzip` and `git`.
 * Internet access on the host, for `download.yml` only.
 * Java isn't needed for the cluster. The demo app builds with the bundled Maven wrapper and any JDK ≥ 25.
-  No Docker daemon is needed: container images are fetched with `crane` and built with Jib/`crane append`.
+  The cluster needs no Docker daemon: container images are fetched with `crane` and built with Jib/`crane append`.
+* Docker with the compose plugin, only for the services outside the cluster (Keycloak, Pebble).
+  `external.yml` runs them with `sudo docker compose`, so pass `-K` for the sudo password.
 
 ## Bring it up
 
@@ -58,7 +65,8 @@ they need is downloaded once onto the Ansible host (`artifacts/`), then installe
 ansible-playbook ansible/download.yml   # host, online: RKE2 tarballs, charts, images, plugins → artifacts/ (~3 GB)
 vagrant up                             # 3 bare VMs on isolated networks
 ansible-playbook ansible/site.yml      # offline: disks, Garage cluster + buckets, RKE2 HA + kube-vip, ./kubeconfig
-ansible-playbook ansible/lgtm.yml      # Loki, Mimir, Tempo, Pyroscope, Alloy, Grafana, ingresses
+ansible-playbook ansible/external.yml -K  # host: Keycloak + Pebble (docker compose, sudo)
+ansible-playbook ansible/lgtm.yml      # cert-manager, CloudNativePG, LGTM, Grafana (+ tenant orgs), ingresses, TLS
 ansible-playbook ansible/demo.yml      # build the demo image (host), load it on the nodes, deploy it
 source scripts/env.sh                  # kubectl/helm/k9s from artifacts/bin with ./kubeconfig
 k9s                                    # terminal UI for the cluster
@@ -67,11 +75,23 @@ k9s                                    # terminal UI for the cluster
 `./kubeconfig` talks to the API through the control-plane VIP (`https://192.168.56.10:6443`), so `kubectl` and `k9s`
 keep working when a server fails. From any directory: `KUBECONFIG=~/projects/lgtm/kubeconfig k9s`.
 
-All playbooks are idempotent. Re-run `lgtm.yml` after changing anything in `k8s/`.
+### Re-running
 
-Point each hostname at its own floating IP in `/etc/hosts` (or DNS):
+All playbooks can be re-run, and a re-run applies new settings:
+
+* `lgtm.yml` applies the VIP Services, Ingresses, the ClusterIssuer and the OAuth Secret as **sets**
+  (`ansible/tasks/apply-set.yml`). Objects that are no longer rendered get deleted, for example a hostname
+  commented out in `service_vips`, which removes its VIP and both its Ingresses. Grafana tenant orgs,
+  datasources and dashboards are created or updated through the API.
+* `site.yml` copies image archives only when containerd on the node doesn't have the image yet (by
+  `artifacts/images/index.yml`), and `demo.yml` copies, imports and restarts only when the image ID changed.
+* Exception: `site.yml` **resets Garage** on every run (see below). Use tags for partial runs:
+  `--tags images` (ship new images) and `--tags otel-import`.
+
+Point each hostname at its own floating IP in `/etc/hosts` (or DNS). Keycloak runs on this machine:
 
 ```
+192.168.56.1  keycloak.org
 192.168.56.21 grafana.org
 192.168.56.22 loki.org
 192.168.56.23 tempo.org
@@ -129,7 +149,15 @@ ansible/site.yml                 nodes: roles garage + rke2, fetch ./kubeconfig
 ansible/roles/garage/            detect disks → wipe + ext4 → Garage systemd service; cluster layout, key, buckets
 ansible/templates/vips.yaml.j2   per-hostname LoadBalancer Services (floating IPs), Garage endpoints
 ansible/templates/ingress.yaml.j2  http + https Ingress per hostname
-ansible/templates/tls.yaml.j2    ClusterIssuer for the company CA (placeholders in group_vars)
+ansible/templates/tls.yaml.j2    ClusterIssuer: ACME with External Account Binding + HMAC Secret
+ansible/templates/grafana-datasources.yaml.j2  datasources for one Grafana org (Main: all tenants)
+ansible/templates/grafana-db.yaml.j2           CloudNativePG cluster for Grafana
+ansible/templates/oauth.yaml.j2  OAuth client secret for Grafana
+ansible/tasks/                   apply-set.yml (apply + prune), grafana-tenants.yml (orgs via API)
+ansible/roles/otel_import/       OTLP/JSON drop directories + cleanup timer
+ansible/external.yml             host: render configs, start Keycloak + Pebble
+ansible/templates/external/      Keycloak realm, Pebble config
+external/docker-compose.yml      Keycloak + Pebble (outside the cluster)
 k8s/dashboards/                  Grafana dashboards (ConfigMap, provisioned into folder LGTM)
 ansible/roles/rke2/              tarball install, image preload, config, kube-vip / canal / local-path manifests
 ansible/lgtm.yml                 Helm releases from artifacts/charts + ingresses
@@ -144,32 +172,93 @@ docs/s3-storage.md               S3 storage research and decision (Garage)
 
 All hostnames answer on port 80 (http) and 443 (https). Each one has two Ingresses
 (`ansible/templates/ingress.yaml.j2`): one on Traefik's `web` entrypoint and one on `websecure` with a `tls:` block.
-**cert-manager** requests a certificate per hostname from the **company CA** and renews it automatically
-(by default when a third of its lifetime is left).
+**cert-manager** requests a certificate per hostname from the CA and renews it automatically, by default when a
+third of its lifetime is left.
 
-The issuer (`ansible/templates/tls.yaml.j2`) is a `ClusterIssuer` of type **ACME** with the **HTTP-01** challenge.
-The CA fetches a token from `http://<host>/.well-known/acme-challenge/…`, which cert-manager publishes through a
+The issuer (`ansible/templates/tls.yaml.j2`) is a `ClusterIssuer` of type **ACME with External Account Binding
+(EAB)**. The CA hands out a key id (`eab_kid`) and an HMAC key (`eab_hmac_key`). cert-manager signs its account
+registration with them, so only that external account receives certificates. The challenge is **HTTP-01**: the CA
+fetches a token from `http://<host>/.well-known/acme-challenge/…`, which cert-manager publishes through a
 temporary Traefik route. That's why plain http stays enabled.
 
-> **Placeholders, untested.** Set the real values in `ansible/group_vars/all.yml` → `tls_issuer` (`acme_server`,
-> `email`, optionally `ca_bundle_file` with the company root CA in PEM), then re-run `ansible-playbook ansible/lgtm.yml`.
-> Until then the ClusterIssuer reports `ErrRegisterACMEAccount` (it can't reach `ca.example.corp`), the
-> Certificates stay pending, and https is served with Traefik's self-signed default certificate.
+**Lab CA: Pebble** (`external/docker-compose.yml`, configured by `ansible/external.yml`):
+* EAB is required. The key id and HMAC key come from `tls_issuer` in `group_vars`, and the HMAC key is generated into
+  `.secrets/acme_eab_hmac_key`.
+* The ACME API is `https://192.168.56.1:14000/dir`. Its TLS certificate is signed by a small CA in
+  `external/.generated/pebble/acme-ca.crt`, which is the issuer's `caBundle`.
+* Certificates are valid for 7 days, so cert-manager renews them after about 5 days.
+* Pebble resolves the cluster hostnames to the VIPs (`extra_hosts`) to validate HTTP-01.
+* Browsers don't trust Pebble's issuing root, which is random per Pebble start
+  (`https://192.168.56.1:15000/roots/0`). Import it for a green padlock.
 
-Requirements on the company side:
-
-* The CA must reach the hostnames on port 80 (HTTP-01). If it can't, switch the solver to `dns01` with your DNS
-  provider.
-* If the CA has no ACME interface (e.g. plain Microsoft AD CS), replace `spec.acme` with the matching
-  cert-manager issuer: `vault` (HashiCorp Vault PKI), `venafi`, or `ca` (an intermediate CA key pair in a Secret).
-* Clients need the company root CA in their trust store, which they normally already have.
+**Company CA:** set `tls_issuer.acme_server`, `email`, `eab_kid` and `eab_hmac_key` (use ansible-vault), and
+`ca_bundle_file` (or `""` if the ACME endpoint has a public certificate). Then re-run `lgtm.yml`. The CA must reach
+the hostnames on port 80.
 
 ```bash
-kubectl get clusterissuer company-ca                  # Ready = True once the CA is reachable
+kubectl get clusterissuer company-ca                  # Ready = True once the ACME account is registered
 kubectl -n lgtm get certificate                       # one per hostname, READY = True when issued
 ```
 
-## Offline installation
+## Tenants
+
+Loki, Mimir, Tempo and Pyroscope run **multi-tenant**: every write and every query carries `X-Scope-OrgID`.
+The tenants are listed in `ansible/group_vars/all.yml`:
+
+| Tenant | Data | How the tenant is set |
+|---|---|---|
+| `demo` | the demo shop: traces, metrics, logs, profiles | OTLP header `X-Scope-OrgID=demo` (`OTEL_EXPORTER_OTLP_HEADERS`), profile label `tenant=demo` (`PYROSCOPE_LABELS`) |
+| `platform` | pod logs of the cluster (all namespaces except `demo`) | set by Alloy (`loki.write` `tenant_id`) |
+
+* **OTLP:** Alloy passes each sender's tenant header through to Tempo, Mimir and Loki (`include_metadata`, batch
+  `metadata_keys`, `otelcol.auth.headers`). Any tenant name works without config changes. Data without the
+  header is rejected by the backends.
+* **Profiles:** `pyroscope.receive_http` doesn't forward request headers, so Alloy routes by the `tenant` label to one
+  `pyroscope.write` per tenant. A new tenant needs a `pyroscope.relabel`/`write` pair in `k8s/values/alloy.yaml`.
+* **Tempo's metrics-generator** writes each tenant's span metrics and service graph to Mimir under the same tenant.
+* **Grafana:** every tenant has its own **organization** of the same name, whose datasources only see that tenant.
+  `lgtm.yml` creates them through the API, with datasources from `ansible/templates/grafana-datasources.yaml.j2`
+  and dashboards from `tenants[].dashboards`. The **Main org** is for admins and sees all tenants through
+  cross-tenant queries (`demo|platform`) for Loki, Mimir and Tempo. Pyroscope has no cross-tenant queries, so it gets
+  one datasource per tenant.
+
+## OAuth (Grafana ↔ Keycloak)
+
+Keycloak runs outside the cluster (`external/docker-compose.yml`, http://keycloak.org:8080, realm `lgtm`).
+Grafana logs in with generic OAuth (OIDC, PKCE) against the client `grafana`. Keycloak groups map to Grafana:
+
+| Keycloak group | Grafana |
+|---|---|
+| `grafana-admins` | Grafana server admin, Admin in every org |
+| `tenant-<name>` | Editor in org `<name>` |
+
+`auto_assign_org` is off, so tenant users never land in the Main org, which sees all tenants.
+The realm (`ansible/templates/external/keycloak-realm.json.j2`) defines the lab users `admin-user`, `alice`
+(tenant demo) and `bob` (tenant platform), with passwords in `.secrets/keycloak_user_<name>`. Keycloak imports
+the realm only if it doesn't exist yet. Manage later changes in the admin console (http://keycloak.org:8080/admin,
+`admin` / `.secrets/keycloak_admin_password`). Grafana's pods resolve `keycloak.org` to the host through
+`hostAliases`. The local `admin` login (`.secrets/grafana_admin_password`) keeps working. Set `oauth.enabled: false`
+to turn OAuth off.
+
+## OTLP/JSON import
+
+Copy OTLP/JSON files to any node, into the directory of a tenant:
+
+```bash
+scp traces.json ops@192.168.56.11:/var/lib/otel-import/demo/
+```
+
+Accepted formats are one OTLP export request per file, or JSON Lines with one request per line (the
+format of the OTel Collector's file exporter). Each request is a `resourceSpans`, `resourceMetrics` or
+`resourceLogs` request.
+* The `otlp-json-import` sidecar in the Alloy pod posts files that haven't changed for a minute to Alloy's
+  receiver `import` (`127.0.0.1:4320`), with the directory name as tenant. Alloy 1.20 has no OTLP-file receiver,
+  hence the sidecar. The receiver, pipelines and tenant routing are configured in Alloy (`k8s/values/alloy.yaml`).
+* Files are then renamed to `*.imported` or `*.failed`. A systemd timer (`otel-import-cleanup.timer`, every
+  15 minutes) deletes them 60 minutes later.
+* The `ops` user can write there through the group `otel-import` (`ansible/roles/otel_import`).
+
+## Offline installation## Offline installation
 
 `download.yml` fills `artifacts/` (git ignores it). Copy that directory to the Ansible host of an air-gapped site:
 
@@ -227,10 +316,10 @@ The provisioned dashboard **LGTM demo shop — observability showcase** (`k8s/da
 golden signals, exemplars, a custom Micrometer metric, logs, a trace table, the service graph and a CPU flame
 graph. Its panels have data links to the flame graph for the selected time range. Drilldown apps: http://grafana.org/drilldown.
 
-**Log volume:** Loki's `/loki/api/v1/drilldown-limits` endpoint ignores `auth_enabled: false` and returns
-`401 no org id` without a tenant header. Logs Drilldown reads `volume_enabled` there and, on *any* error, shows
-"Log volume has not been configured." The Loki datasource therefore sends `X-Scope-OrgID: fake`, the tenant Loki
-uses internally in single-tenant mode.
+**Log volume:** Loki's `/loki/api/v1/drilldown-limits` endpoint needs a tenant header even with `auth_enabled: false`
+(`401 no org id`). Logs Drilldown reads `volume_enabled` there and, on *any* error, shows "Log volume has not been
+configured." Now that Loki is multi-tenant, every Loki datasource sends its tenant in `X-Scope-OrgID`, which also
+covers this endpoint.
 
 ### The demo app
 
@@ -267,7 +356,8 @@ Stop any one VM with `vagrant halt lgtm2` (or `virsh destroy`). This is what kee
 | Loki / Mimir | 3 replicas, replication factor 3, quorum writes and reads on 2 of 3 |
 | Pyroscope | raft metastore with 3 members (quorum 2), segment writers on every replica |
 | Tempo | **single instance** (Tempo 3 monolithic doesn't support more than one `-target=all`). It runs without a PVC and tolerates an unreachable node for only 30 s, so it reschedules quickly. Traces still buffered in its WAL at that moment are lost. Already stored traces are in S3. For real HA, use `tempo-distributed` |
-| Grafana | stateless and fully provisioned. It reschedules after 30 s like Tempo, and starts fast because the plugins are in the image. Use an external database to run several replicas |
+| Grafana | 2 replicas on PostgreSQL (shared users, orgs, sessions), alerting HA via the headless service. The plugins are in the image, so a restart is fast |
+| PostgreSQL | CloudNativePG cluster `grafana-db`: 3 instances on different nodes. The operator promotes a replica and moves `grafana-db-rw` when the primary fails |
 | Alloy | DaemonSet. The Service routes OTLP to any live instance |
 
 Stateful pods with local-path volumes (Loki, Mimir, Pyroscope) stay `Pending` until their node returns. The
@@ -287,7 +377,9 @@ Notes:
 * Data disks: every unpartitioned whole disk is used **and wiped on every run**. Make sure servers have no other
   such disks, extend `garage_disk_exclude` if they do, and remove the reset steps from
   `ansible/roles/garage/tasks/main.yml` once the cluster holds real data.
-* TLS: fill in the company CA placeholders (see [TLS](#tls)).
+* TLS: point `tls_issuer` at the company CA and its EAB credentials (see [TLS](#tls)).
+* OAuth: point `oauth.issuer` at the company IdP. With another IdP than Keycloak, map its group claim in
+  `grafana_oauth_overlay` (`ansible/lgtm.yml`).
 * Data disks: see the sizing notes in [docs/s3-storage.md](docs/s3-storage.md). The local-path PVCs (WALs) live on the root disk under
   `/opt/local-path-provisioner`.
 * Retention is 7 days for all signals (`k8s/values/*.yaml`).
