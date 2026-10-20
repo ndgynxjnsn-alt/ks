@@ -1,0 +1,8 @@
+# CloudNativePG operator: runs the PostgreSQL cluster that backs Grafana (ansible/templates/grafana-db.yaml.j2).
+crds:
+  create: true
+monitoring:
+  podMonitorEnabled: false
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 256Mi }

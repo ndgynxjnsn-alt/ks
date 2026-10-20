@@ -11,6 +11,10 @@
         namespace: cert-manager
         chart: "cert-manager-{{ charts['cert-manager'].version }}.tgz"
         secrets: {}
+      - name: cloudnative-pg
+        namespace: cnpg-system
+        chart: "cloudnative-pg-{{ charts['cloudnative-pg'].version }}.tgz"
+        secrets: {}
       - name: loki
         chart: "loki-{{ charts.loki.version }}.tgz"
         secrets:
@@ -74,8 +78,37 @@
           - --wait
           - --timeout=15m
         stdin: "{{ item.secrets | to_nice_yaml }}"
-      loop: "{{ releases }}"
+      loop: "{{ releases | rejectattr('name', 'equalto', 'grafana') }}"
       loop_control: { label: "{{ item.name }}" }
+
+    - name: PostgreSQL cluster for Grafana (CloudNativePG)
+      ansible.builtin.include_tasks: tasks/apply-set.yml
+      vars:
+        set_name: grafana-db
+        set_kinds: [clusters.postgresql.cnpg.io]
+        manifest: "{{ lookup('template', 'templates/grafana-db.yaml.j2') }}"
+
+    - name: Wait until the database cluster is ready
+      ansible.builtin.command: "{{ kubectl }} -n lgtm wait cluster/grafana-db --for=condition=Ready --timeout=15m"
+      changed_when: false
+
+    - name: Install Grafana
+      ansible.builtin.command:
+        argv:
+          - "{{ artifacts_dir }}/bin/helm"
+          - upgrade
+          - --install
+          - grafana
+          - "{{ artifacts_dir }}/charts/{{ grafana.chart }}"
+          - --kubeconfig={{ repo_dir }}/kubeconfig
+          - --namespace=lgtm
+          - --values={{ repo_dir }}/k8s/values/grafana.yaml
+          - --values=-
+          - --wait
+          - --timeout=15m
+        stdin: "{{ grafana.secrets | to_nice_yaml }}"
+      vars:
+        grafana: "{{ releases | selectattr('name', 'equalto', 'grafana') | first }}"
 
     - name: Certificate issuer (company CA)
       ansible.builtin.include_tasks: tasks/apply-set.yml
