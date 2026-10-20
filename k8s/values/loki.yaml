@@ -53,6 +53,12 @@ singleBinary:
       labelSelector:
         matchLabels: { app.kubernetes.io/component: single-binary }
 
+# Publish not-ready pods in the memberlist DNS, so replicas find each other on a cold start (otherwise
+# "failed to resolve loki-memberlist" until the first pod turns ready).
+memberlist:
+  service:
+    publishNotReadyAddresses: true
+
 gateway: { enabled: false }
 lokiCanary: { enabled: false }
 test: { enabled: false }

@@ -12,9 +12,11 @@ adminUser: admin
 persistence:
   enabled: false
 
+# Grafana idles at ~300 Mi; with 512 Mi a dashboard on a 15 s refresh (flame graph, trace table, streaming)
+# got it OOM-killed -> CrashLoopBackOff without any log line.
 resources:
-  requests: { cpu: 50m, memory: 128Mi }
-  limits: { memory: 512Mi }
+  requests: { cpu: 100m, memory: 384Mi }
+  limits: { memory: 1Gi }
 
 tolerations:
   - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
@@ -30,8 +32,9 @@ grafana.ini:
     check_for_plugin_updates: false
   plugins:
     preinstall_disabled: true   # offline: the Drilldown apps ship in plugins-bundled
-  feature_toggles:
-    enable: traceToProfiles tracesEmbeddedFlameGraph
+  feature_toggles:            # individual entries (feature_toggles.enable is deprecated)
+    traceToProfiles: true
+    tracesEmbeddedFlameGraph: true
 
 # Dashboards from the ConfigMap "grafana-dashboards" (k8s/dashboards/*.json, created by ansible/lgtm.yml).
 dashboardProviders:

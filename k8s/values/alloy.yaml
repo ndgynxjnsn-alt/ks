@@ -14,7 +14,7 @@ alloy:
     - { name: profiles, port: 9999, targetPort: 9999, protocol: TCP }
   resources:
     requests: { cpu: 50m, memory: 128Mi }
-    limits: { memory: 512Mi }
+    limits: { memory: 1Gi }     # the node tailing the most pod logs reached ~350 Mi
   configMap:
     content: |
       // ---------------------------------------------------------------- OTLP

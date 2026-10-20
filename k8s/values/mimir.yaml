@@ -44,6 +44,11 @@ mimir:
     # dead node drops out after its heartbeat times out (DNS keeps listing not-ready pods -> slow queries).
     query_scheduler:
       service_discovery_mode: ring
+    # Each querier spreads max_concurrent over all query-scheduler instances (one per replica = 3). The chart's
+    # 16 isn't divisible by 3 ("max concurrency is not evenly divisible across request queue instances"), so use a
+    # multiple of 3: 12 = 4 parallel sub-queries per querier and scheduler.
+    querier:
+      max_concurrent: 12
     frontend:
       scheduler_address: ""
     frontend_worker:
