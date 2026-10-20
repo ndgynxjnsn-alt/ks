@@ -2,12 +2,15 @@
 #   OTLP (traces, metrics, logs) on 4317/4318 -> Tempo / Mimir / Loki, tenant = the sender's X-Scope-OrgID header
 #   Pyroscope push API on 9999            -> Pyroscope, tenant = the profile's "tenant" label
 #   Pod logs of every node (/var/log/pods) -> Loki, tenant "platform"
+#   OTLP/JSON files in /var/lib/otel-import/<tenant>/ on every node -> the "import" pipeline below
 fullnameOverride: alloy
 
 alloy:
   enableReporting: false
   mounts:
     varlog: true
+    extra:
+      - { name: otel-import, mountPath: /otel-import, readOnly: true }
   extraPorts:
     - { name: otlp-grpc, port: 4317, targetPort: 4317, protocol: TCP }
     - { name: otlp-http, port: 4318, targetPort: 4318, protocol: TCP }
@@ -27,6 +30,20 @@ alloy:
         }
         http {
           endpoint         = "0.0.0.0:4318"
+          include_metadata = true
+        }
+        output {
+          metrics = [otelcol.processor.batch.default.input]
+          logs    = [otelcol.processor.batch.default.input]
+          traces  = [otelcol.processor.batch.default.input]
+        }
+      }
+
+      // OTLP/JSON file import: the sidecar "otlp-json-import" (below) posts the files from
+      // /var/lib/otel-import/<tenant>/ to this receiver (localhost only), with X-Scope-OrgID = <tenant>.
+      otelcol.receiver.otlp "import" {
+        http {
+          endpoint         = "127.0.0.1:4320"
           include_metadata = true
         }
         output {
@@ -195,3 +212,53 @@ alloy:
 configReloader:
   image:
     tag: v0.94.0
+
+controller:
+  volumes:
+    extra:
+      - name: otel-import
+        hostPath: { path: /var/lib/otel-import, type: DirectoryOrCreate }
+  # Imports OTLP/JSON files (one export request per line, as written by the OTel Collector's file exporter,
+  # or a single pretty-printed request) into Alloy's "import" receiver. A file is picked up once it hasn't
+  # changed for a minute (scp finished), renamed to *.imported (or *.failed), and deleted later by the
+  # otel-import-cleanup timer on the node. Alloy cannot read OTLP/JSON files itself (no otlpjsonfile
+  # receiver in Alloy 1.20), hence the sidecar.
+  extraContainers:
+    - name: otlp-json-import
+      image: docker.io/library/busybox:1.37
+      imagePullPolicy: IfNotPresent
+      volumeMounts:
+        - { name: otel-import, mountPath: /otel-import }
+      resources:
+        requests: { cpu: 5m, memory: 16Mi }
+        limits: { memory: 64Mi }
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          post() {  # $1 file with one OTLP/JSON request, $2 tenant
+            if grep -q '"resourceSpans"' "$1"; then p=v1/traces
+            elif grep -q '"resourceMetrics"' "$1"; then p=v1/metrics
+            elif grep -q '"resourceLogs"' "$1"; then p=v1/logs
+            else echo "not OTLP/JSON: $1"; return 1; fi
+            wget -q -O /dev/null --header "Content-Type: application/json" --header "X-Scope-OrgID: $2" \
+              --post-file "$1" "http://127.0.0.1:4320/$p"
+          }
+          while true; do
+            find /otel-import -mindepth 2 -maxdepth 2 -type f -name '*.json' -mmin +0 | while read -r f; do
+              tenant=$(basename "$(dirname "$f")"); ok=1
+              if [ "$(grep -c . "$f")" -gt 1 ] && head -c 1 "$f" | grep -q '{' && [ "$(head -n 1 "$f" | tail -c 2)" = "}" ]; then
+                # JSON Lines: one request per line
+                while IFS= read -r line; do
+                  [ -z "$line" ] && continue
+                  printf '%s' "$line" > /tmp/request.json
+                  post /tmp/request.json "$tenant" || ok=0
+                done < "$f"
+              else
+                post "$f" "$tenant" || ok=0
+              fi
+              if [ $ok = 1 ]; then mv "$f" "$f.imported"; echo "imported $f (tenant $tenant)"
+              else mv "$f" "$f.failed"; echo "FAILED $f (tenant $tenant)"; fi
+            done
+            sleep 15
+          done
+

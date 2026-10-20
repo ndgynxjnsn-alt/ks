@@ -20,6 +20,12 @@
   become: true
   roles: [garage]
 
+- name: OTLP/JSON import directories
+  hosts: nodes
+  become: true
+  roles: [otel_import]
+  tags: [otel-import]
+
 - name: First RKE2 server (bootstraps etcd and kube-vip)
   hosts: nodes[0]
   become: true

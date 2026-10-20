@@ -1,0 +1,48 @@
+# Drop directory for OTLP/JSON files: scp a file to <node>:/var/lib/otel-import/<tenant>/ and Alloy's
+# otlp-json-import sidecar imports it as that tenant (k8s/values/alloy.yaml). Processed files are renamed
+# to *.imported / *.failed and deleted by a timer after otel_import_keep_minutes.
+- name: Group for uploading files
+  ansible.builtin.group: { name: "{{ otel_import_group }}", system: true }
+
+- name: "Add {{ ansible_user }} to {{ otel_import_group }}"
+  ansible.builtin.user: { name: "{{ ansible_user }}", groups: ["{{ otel_import_group }}"], append: true }
+
+- name: Import directory
+  ansible.builtin.file: { path: "{{ otel_import_dir }}", state: directory, owner: root, group: "{{ otel_import_group }}", mode: "0755" }
+
+- name: One directory per tenant (setgid, group-writable)
+  ansible.builtin.file:
+    path: "{{ otel_import_dir }}/{{ item.name }}"
+    state: directory
+    owner: root
+    group: "{{ otel_import_group }}"
+    mode: "2775"
+  loop: "{{ tenants }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Cleanup service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/otel-import-cleanup.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Delete processed OTLP/JSON import files
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/find {{ otel_import_dir }} -mindepth 2 -maxdepth 2 -type f ( -name *.imported -o -name *.failed ) -mmin +{{ otel_import_keep_minutes }} -delete
+
+- name: Cleanup timer (every 15 minutes)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/otel-import-cleanup.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Delete processed OTLP/JSON import files periodically
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=15min
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable cleanup timer
+  ansible.builtin.systemd_service: { name: otel-import-cleanup.timer, enabled: true, state: started, daemon_reload: true }

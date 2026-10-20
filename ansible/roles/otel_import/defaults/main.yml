@@ -1,0 +1,3 @@
+otel_import_dir: /var/lib/otel-import
+otel_import_group: otel-import        # members may scp files into the tenant directories
+otel_import_keep_minutes: 60          # *.imported / *.failed are deleted after this
