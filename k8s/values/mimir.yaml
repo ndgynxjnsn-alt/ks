@@ -34,7 +34,9 @@ overrides_exporter: { enabled: false }
 
 mimir:
   structuredConfig:
-    multitenancy_enabled: false   # single tenant ("anonymous"); clients need no X-Scope-OrgID header
+    multitenancy_enabled: true    # X-Scope-OrgID on every request (tenants in group_vars)
+    tenant_federation:
+      enabled: true               # "demo|platform" for Grafana's Main org
     ingest_storage:
       enabled: false
       kafka: { address: null, topic: null, auto_create_topic_default_partitions: null }

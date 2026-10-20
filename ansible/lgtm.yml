@@ -32,7 +32,14 @@
         secrets: {}
       - name: grafana
         chart: "grafana-{{ charts.grafana.version }}.tgz"
-        secrets: { adminPassword: "{{ grafana_admin_password }}" }
+        secrets:
+          adminPassword: "{{ grafana_admin_password }}"
+          # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources: "{{ lookup('template', 'templates/grafana-datasources.yaml.j2',
+                               template_vars={'ds_tenants': tenants | map(attribute='name') | list, 'ds_dollar': '$$'}) | from_yaml }}"
   tasks:
     - name: Floating IPs per hostname (LoadBalancer Services) and the in-cluster Garage endpoint
       ansible.builtin.include_tasks: tasks/apply-set.yml
@@ -83,6 +90,11 @@
         set_name: ingress
         set_kinds: [ingresses]
         manifest: "{{ lookup('template', 'templates/ingress.yaml.j2') }}"
+
+    - name: Grafana organizations per tenant (datasources scoped to the tenant, dashboards)
+      ansible.builtin.include_tasks: tasks/grafana-tenants.yml
+      loop: "{{ tenants }}"
+      loop_control: { loop_var: tenant, label: "{{ tenant.name }}" }
 
     - name: Done
       ansible.builtin.debug:

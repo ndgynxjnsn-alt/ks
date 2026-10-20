@@ -5,6 +5,9 @@ replicas: 1
 
 tempo:
   streamOverHttpEnabled: true   # streaming search for Grafana (datasource streamingEnabled)
+  # X-Scope-OrgID on every request; "a|b" queries several tenants. The metrics-generator writes each
+  # tenant's span metrics to Mimir under the same tenant.
+  multitenancyEnabled: true
   reportingEnabled: false
   retention: 168h
   storage:

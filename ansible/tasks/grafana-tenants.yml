@@ -1,0 +1,105 @@
+# One Grafana organization per tenant: created via the HTTP API (provisioning can't create orgs), with the
+# datasources of ansible/templates/grafana-datasources.yaml.j2 pinned to the tenant and its dashboards.
+# Idempotent: existing orgs/datasources are updated in place. Var: tenant ({name, dashboards}).
+- name: "Grafana org {{ tenant.name }}"
+  vars:
+    grafana_api: "http://{{ service_vips.grafana.ip }}/api"
+    grafana_headers: { Host: "{{ service_vips.grafana.host }}" }
+  block:
+    - name: Wait for the Grafana API
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/health"
+        headers: "{{ grafana_headers }}"
+      register: health
+      until: health.status == 200
+      retries: 30
+      delay: 10
+
+    - name: "Look up org {{ tenant.name }}"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/orgs/name/{{ tenant.name }}"
+        headers: "{{ grafana_headers }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: org_lookup
+
+    - name: "Create org {{ tenant.name }} (the admin user becomes its Admin)"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/orgs"
+        method: POST
+        headers: "{{ grafana_headers }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: { name: "{{ tenant.name }}" }
+      register: org_created
+      when: org_lookup.status == 404
+      changed_when: true
+
+    - name: Remember the org id
+      ansible.builtin.set_fact:
+        tenant_org_id: "{{ org_created.json.orgId if org_lookup.status == 404 else org_lookup.json.id }}"
+
+    - name: "Datasources of org {{ tenant.name }}"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/datasources/uid/{{ ds.uid }}"
+        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      loop: "{{ tenant_datasources }}"
+      loop_control: { loop_var: ds, label: "{{ ds.uid }}" }
+      register: ds_lookup
+      vars:
+        tenant_datasources: >-
+          {{ lookup('template', 'templates/grafana-datasources.yaml.j2',
+             template_vars={'ds_tenants': [tenant.name], 'ds_dollar': '$'}) | from_yaml }}
+
+    - name: "Create or update datasources of org {{ tenant.name }}"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/datasources{{ ('/uid/' ~ item.ds.uid) if item.status == 200 else '' }}"
+        method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: "{{ item.ds }}"
+      loop: "{{ ds_lookup.results }}"
+      loop_control: { label: "{{ item.ds.uid }}" }
+      changed_when: item.status == 404
+
+    - name: "Folder LGTM in org {{ tenant.name }}"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/folders"
+        method: POST
+        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: { uid: lgtm, title: LGTM }
+        status_code: [200, 409, 412]   # 409/412: exists already
+      register: folder
+      changed_when: folder.status == 200
+      when: tenant.dashboards | length > 0
+
+    - name: "Dashboards of org {{ tenant.name }}"
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/dashboards/db"
+        method: POST
+        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          dashboard: "{{ lookup('file', repo_dir + '/k8s/dashboards/' + item) | from_json | combine({'id': none}) }}"
+          folderUid: lgtm
+          overwrite: true
+      loop: "{{ tenant.dashboards }}"
+      changed_when: false

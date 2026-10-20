@@ -1,10 +1,12 @@
-# Loki monolithic: 3 replicas, replication factor 3, chunks + index in Garage S3.
+# Loki monolithic, multi-tenant: 3 replicas, replication factor 3, chunks + index in Garage S3.
 # S3 endpoint and credentials are added by ansible/lgtm.yml.
 deploymentMode: Monolithic
 fullnameOverride: loki
 
 loki:
-  auth_enabled: false
+  auth_enabled: true            # multi-tenant: X-Scope-OrgID on every request (tenants in group_vars)
+  querier:
+    multi_tenant_queries_enabled: true   # "demo|platform" for Grafana's Main org
   commonConfig:
     replication_factor: 3
   schemaConfig:

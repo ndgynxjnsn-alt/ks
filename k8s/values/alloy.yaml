@@ -1,7 +1,7 @@
-# Grafana Alloy as DaemonSet: the single entry point for telemetry.
-#   OTLP (traces, metrics, logs) on 4317/4318 -> Tempo / Mimir / Loki
-#   Pyroscope push API on 9999            -> Pyroscope
-#   Pod logs of every node (/var/log/pods) -> Loki
+# Grafana Alloy as DaemonSet: the single entry point for telemetry. Multi-tenant:
+#   OTLP (traces, metrics, logs) on 4317/4318 -> Tempo / Mimir / Loki, tenant = the sender's X-Scope-OrgID header
+#   Pyroscope push API on 9999            -> Pyroscope, tenant = the profile's "tenant" label
+#   Pod logs of every node (/var/log/pods) -> Loki, tenant "platform"
 fullnameOverride: alloy
 
 alloy:
@@ -18,9 +18,17 @@ alloy:
   configMap:
     content: |
       // ---------------------------------------------------------------- OTLP
+      // The sender's X-Scope-OrgID header travels with the data (include_metadata -> batch per tenant
+      // -> otelcol.auth.headers) to the backends. Data without the header is rejected by them (401).
       otelcol.receiver.otlp "default" {
-        grpc { endpoint = "0.0.0.0:4317" }
-        http { endpoint = "0.0.0.0:4318" }
+        grpc {
+          endpoint         = "0.0.0.0:4317"
+          include_metadata = true
+        }
+        http {
+          endpoint         = "0.0.0.0:4318"
+          include_metadata = true
+        }
         output {
           metrics = [otelcol.processor.batch.default.input]
           logs    = [otelcol.processor.batch.default.input]
@@ -29,6 +37,7 @@ alloy:
       }
 
       otelcol.processor.batch "default" {
+        metadata_keys = ["X-Scope-OrgID"]
         output {
           metrics = [otelcol.exporter.otlphttp.mimir.input]
           logs    = [otelcol.exporter.otlphttp.loki.input]
@@ -36,32 +45,85 @@ alloy:
         }
       }
 
+      otelcol.auth.headers "tenant" {
+        header {
+          key          = "X-Scope-OrgID"
+          from_context = "X-Scope-OrgID"
+        }
+      }
+
       otelcol.exporter.otlphttp "mimir" {
-        client { endpoint = "http://mimir-monolithic.lgtm.svc:8080/otlp" }
+        client {
+          endpoint = "http://mimir-monolithic.lgtm.svc:8080/otlp"
+          auth     = otelcol.auth.headers.tenant.handler
+        }
       }
 
       otelcol.exporter.otlphttp "loki" {
-        client { endpoint = "http://loki.lgtm.svc:3100/otlp" }
+        client {
+          endpoint = "http://loki.lgtm.svc:3100/otlp"
+          auth     = otelcol.auth.headers.tenant.handler
+        }
       }
 
       otelcol.exporter.otlp "tempo" {
         client {
           endpoint = "tempo.lgtm.svc:4317"
           tls { insecure = true }
+          auth     = otelcol.auth.headers.tenant.handler
         }
       }
 
       // ---------------------------------------------------------------- Profiles
+      // pyroscope.receive_http does not forward request headers, so the tenant comes from the profile label
+      // "tenant" (Pyroscope agent: PYROSCOPE_LABELS=tenant=<name>). One relabel+write pair per tenant;
+      // profiles without a known tenant label are dropped.
       pyroscope.receive_http "default" {
         http {
           listen_address = "0.0.0.0"
           listen_port    = 9999
         }
-        forward_to = [pyroscope.write.default.receiver]
+        forward_to = [pyroscope.relabel.demo.receiver, pyroscope.relabel.platform.receiver]
       }
 
-      pyroscope.write "default" {
-        endpoint { url = "http://pyroscope.lgtm.svc:4040" }
+      pyroscope.relabel "demo" {
+        forward_to = [pyroscope.write.demo.receiver]
+        rule {
+          source_labels = ["tenant"]
+          regex         = "demo"
+          action        = "keep"
+        }
+        rule {
+          regex  = "tenant"
+          action = "labeldrop"
+        }
+      }
+
+      pyroscope.write "demo" {
+        endpoint {
+          url     = "http://pyroscope.lgtm.svc:4040"
+          headers = { "X-Scope-OrgID" = "demo" }
+        }
+      }
+
+      pyroscope.relabel "platform" {
+        forward_to = [pyroscope.write.platform.receiver]
+        rule {
+          source_labels = ["tenant"]
+          regex         = "platform"
+          action        = "keep"
+        }
+        rule {
+          regex  = "tenant"
+          action = "labeldrop"
+        }
+      }
+
+      pyroscope.write "platform" {
+        endpoint {
+          url     = "http://pyroscope.lgtm.svc:4040"
+          headers = { "X-Scope-OrgID" = "platform" }
+        }
       }
 
       // ---------------------------------------------------------------- Pod logs
@@ -122,7 +184,10 @@ alloy:
       }
 
       loki.write "default" {
-        endpoint { url = "http://loki.lgtm.svc:3100/loki/api/v1/push" }
+        endpoint {
+          url       = "http://loki.lgtm.svc:3100/loki/api/v1/push"
+          tenant_id = "platform"
+        }
       }
 
 # Plain tag instead of the chart's tag@index-digest: offline nodes only hold the amd64 image, whose

@@ -18,6 +18,7 @@ pyroscope:
       labelSelector:
         matchLabels: { app.kubernetes.io/component: all }
   structuredConfig:
+    multitenancy_enabled: true   # X-Scope-OrgID on every request (tenants in group_vars)
     storage:
       backend: s3
       s3:
