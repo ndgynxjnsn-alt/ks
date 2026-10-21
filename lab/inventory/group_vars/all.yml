@@ -37,8 +37,8 @@ gitops:
 tenants:
   - name: demo                     # the demo shop
     dashboards: [lgtm-demo.json]   # from k8s/dashboards, imported into the tenant's Grafana org
-  - name: platform                 # logs of the cluster itself (all namespaces except demo)
-    dashboards: []
+  - name: platform                 # the cluster itself: pod logs (all namespaces except demo) and metrics
+    dashboards: [cluster-health.json]
 
 # ---------------------------------------------------------------- services outside the cluster (external/)
 # Keycloak (OAuth for Grafana) and Pebble (a small ACME server standing in for the company CA) run with

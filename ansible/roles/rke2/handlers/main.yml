@@ -1,0 +1,4 @@
+# Config changes on an existing server; a freshly installed one just started with the new config.
+- name: Restart RKE2
+  ansible.builtin.systemd_service: { name: rke2-server, state: restarted }
+  when: not (rke2_install.changed | default(false))

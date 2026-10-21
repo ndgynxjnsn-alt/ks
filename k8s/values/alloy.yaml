@@ -3,6 +3,7 @@
 #   Pyroscope push API on 9999            -> Pyroscope, tenant = the profile's "tenant" label
 #   Pod logs of every node (/var/log/pods) -> Loki, tenant "platform"
 #   OTLP/JSON files in /var/lib/otel-import/<tenant>/ on every node -> the "import" pipeline below
+#   Cluster metrics of this node (node, kubelet/cAdvisor, etcd, Garage, component pods) -> Mimir, tenant "platform"
 fullnameOverride: alloy
 
 alloy:
@@ -11,6 +12,15 @@ alloy:
     varlog: true
     extra:
       - { name: otel-import, mountPath: /otel-import, readOnly: true }
+      # host filesystems for the node exporter (prometheus.exporter.unix)
+      - { name: host-root, mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer }
+      - { name: host-proc, mountPath: /host/proc, readOnly: true }
+      - { name: host-sys, mountPath: /host/sys, readOnly: true }
+  extraEnv:
+    - name: NODE_IP                          # etcd and Garage metrics are scraped on the node's address
+      valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+    - name: GARAGE_METRICS_TOKEN             # Garage's metrics_token (Secret created by ansible/lgtm.yml)
+      valueFrom: { secretKeyRef: { name: garage-metrics, key: token } }
   extraPorts:
     - { name: otlp-grpc, port: 4317, targetPort: 4317, protocol: TCP }
     - { name: otlp-http, port: 4318, targetPort: 4318, protocol: TCP }
@@ -200,6 +210,142 @@ alloy:
         forward_to = [loki.write.default.receiver]
       }
 
+      // ---------------------------------------------------------------- Cluster self-observability
+      // Every Alloy instance (DaemonSet) collects only its own node, so nothing is scraped twice. All of it
+      // goes to Mimir as tenant "platform" (dashboard "Cluster health"), with the label node=<node name>.
+      prometheus.remote_write "platform" {
+        endpoint {
+          url     = "http://mimir-monolithic.lgtm.svc:8080/api/v1/push"
+          headers = { "X-Scope-OrgID" = "platform" }
+        }
+      }
+
+      prometheus.relabel "node" {
+        forward_to = [prometheus.remote_write.platform.receiver]
+        rule {
+          target_label = "node"
+          replacement  = sys.env("HOSTNAME")
+        }
+      }
+
+      // node exporter (built into Alloy) on the host's /proc, /sys and /
+      prometheus.exporter.unix "node" {
+        procfs_path = "/host/proc"
+        sysfs_path  = "/host/sys"
+        rootfs_path = "/host/root"
+        filesystem {
+          mount_points_exclude = "^/(dev|proc|run|sys|var/lib/kubelet|var/lib/rancher/rke2/agent/containerd)($|/)"
+        }
+      }
+
+      prometheus.scrape "node" {
+        job_name   = "node"
+        targets    = prometheus.exporter.unix.node.targets
+        forward_to = [prometheus.relabel.node.receiver]
+      }
+
+      // kubelet and cAdvisor of this node (service account token; the chart's RBAC grants nodes/metrics)
+      prometheus.scrape "kubelet" {
+        job_name          = "kubelet"
+        targets           = [{ "__address__" = sys.env("NODE_IP") + ":10250" }]
+        scheme            = "https"
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tls_config { insecure_skip_verify = true }
+        forward_to        = [prometheus.relabel.kubelet.receiver]
+      }
+
+      prometheus.relabel "kubelet" {
+        forward_to = [prometheus.relabel.node.receiver]
+        rule {
+          source_labels = ["__name__"]
+          regex         = "up|kubelet_running_pods|kubelet_running_containers|kubelet_volume_stats_(used|capacity)_bytes"
+          action        = "keep"
+        }
+      }
+
+      prometheus.scrape "cadvisor" {
+        job_name          = "cadvisor"
+        targets           = [{ "__address__" = sys.env("NODE_IP") + ":10250" }]
+        scheme            = "https"
+        metrics_path      = "/metrics/cadvisor"
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tls_config { insecure_skip_verify = true }
+        forward_to        = [prometheus.relabel.cadvisor.receiver]
+      }
+
+      // cAdvisor is large: keep CPU/memory/network per container only
+      prometheus.relabel "cadvisor" {
+        forward_to = [prometheus.relabel.node.receiver]
+        rule {
+          source_labels = ["__name__"]
+          regex         = "up|container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_(receive|transmit)_bytes_total"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__name__", "container"]
+          regex         = "container_(cpu|memory).*;(|POD)"
+          action        = "drop"
+        }
+      }
+
+      // etcd of this node (RKE2 etcd-expose-metrics) and Garage (admin API, metrics_token)
+      prometheus.scrape "etcd" {
+        job_name   = "etcd"
+        targets    = [{ "__address__" = sys.env("NODE_IP") + ":2381" }]
+        forward_to = [prometheus.relabel.node.receiver]
+      }
+
+      prometheus.scrape "garage" {
+        job_name     = "garage"
+        targets      = [{ "__address__" = sys.env("NODE_IP") + ":3903" }]
+        bearer_token = sys.env("GARAGE_METRICS_TOKEN")
+        forward_to   = [prometheus.relabel.node.receiver]
+      }
+
+      // metrics ports of the platform components running on this node (namespace;port)
+      discovery.relabel "component_pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          regex         = "Running"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_port_number"]
+          regex         = "lgtm;(3100|8080|3200|4040|3000|12345|9187)|cert-manager;9402|cnpg-system;8080|argocd;(8082|8083|8084)|kube-system;(8080|9100|9153)"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_container_name"]
+          regex         = "([^;]+);(?:([^;]+);.*|;(.+))"
+          replacement   = "$1/$2$3"
+          target_label  = "job"
+        }
+      }
+
+      prometheus.scrape "component_pods" {
+        job_name   = "component-pods"
+        targets    = discovery.relabel.component_pods.output
+        forward_to = [prometheus.relabel.node.receiver]
+      }
+
+      // Alloy itself
+      prometheus.exporter.self "alloy" { }
+
+      prometheus.scrape "alloy" {
+        job_name   = "alloy"
+        targets    = prometheus.exporter.self.alloy.targets
+        forward_to = [prometheus.relabel.node.receiver]
+      }
+
       loki.write "default" {
         endpoint {
           url       = "http://loki.lgtm.svc:3100/loki/api/v1/push"
@@ -218,6 +364,9 @@ controller:
     extra:
       - name: otel-import
         hostPath: { path: /var/lib/otel-import, type: DirectoryOrCreate }
+      - { name: host-root, hostPath: { path: / } }
+      - { name: host-proc, hostPath: { path: /proc } }
+      - { name: host-sys, hostPath: { path: /sys } }
   # Imports OTLP/JSON files (one export request per line, as written by the OTel Collector's file exporter,
   # or a single pretty-printed request) into Alloy's "import" receiver. A file is picked up once it hasn't
   # changed for a minute (scp finished), renamed to *.imported (or *.failed), and deleted later by the

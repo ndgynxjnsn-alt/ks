@@ -26,6 +26,10 @@
           version: "{{ charts['cloudnative-pg'].version }}"
           namespace: cnpg-system
           wave: -3
+        kube-state-metrics:
+          version: "{{ charts['kube-state-metrics'].version }}"
+          namespace: kube-system
+          wave: 0
         platform:
           path: argocd/platform
           wave: -2

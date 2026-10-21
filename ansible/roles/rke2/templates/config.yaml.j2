@@ -3,6 +3,7 @@ token: {{ rke2_token }}
 node-ip: {{ ansible_host }}
 tls-san: ["{{ vip }}", "{{ ansible_host }}"]
 write-kubeconfig-mode: "0600"
+etcd-expose-metrics: true    # etcd metrics on <node-ip>:2381 (scraped by Alloy, dashboard Cluster health)
 {% if not rke2_first_server %}
 server: https://{{ vip }}:9345
 {% endif %}

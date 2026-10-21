@@ -21,8 +21,8 @@ gitops:
 
 # ---------------------------------------------------------------- tenants
 tenants:
-  - name: platform
-    dashboards: []
+  - name: platform               # the cluster itself: pod logs and metrics (Alloy)
+    dashboards: [cluster-health.json]
 
 # ---------------------------------------------------------------- TLS: company CA (ACME + EAB, DNS-01 via RFC2136)
 tls_issuer:

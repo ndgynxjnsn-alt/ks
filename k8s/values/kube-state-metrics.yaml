@@ -1,0 +1,6 @@
+# kube-state-metrics: state of Kubernetes objects (node conditions, pod readiness, restarts, deployments) for
+# the dashboard "Cluster health". Scraped by Alloy on the node it runs on (tenant platform).
+fullnameOverride: kube-state-metrics
+resources:
+  requests: { cpu: 20m, memory: 64Mi }
+  limits: { memory: 256Mi }

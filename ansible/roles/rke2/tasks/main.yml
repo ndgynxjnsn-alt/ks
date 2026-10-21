@@ -72,9 +72,11 @@
     INSTALL_RKE2_ARTIFACT_PATH: /root/rke2-artifacts
     INSTALL_RKE2_VERSION: "{{ rke2_version }}"
   args: { creates: /usr/local/bin/rke2 }
+  register: rke2_install
 
 - name: Configure RKE2
   ansible.builtin.template: { src: config.yaml.j2, dest: /etc/rancher/rke2/config.yaml, mode: "0600" }
+  notify: Restart RKE2   # site.yml runs the servers one after another, so restarts are rolling
 
 - name: Add-on manifests applied by RKE2 itself
   ansible.builtin.template: { src: "{{ item }}.j2", dest: "/var/lib/rancher/rke2/server/manifests/{{ item }}", mode: "0644" }
