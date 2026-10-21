@@ -1,6 +1,6 @@
 # {{ ansible_managed }}
-# Every hostname twice: plain http on Traefik's "web" entrypoint, and https on "websecure" with a certificate
-# that cert-manager obtains from the company CA (ClusterIssuer {{ tls_issuer.name }}) and keeps renewed.
+# Every hostname <name>.{{ domain }} twice: plain http on Traefik's "web" entrypoint, and https on
+# "websecure" with the wildcard certificate *.{{ domain }} (Secret lgtm-wildcard-tls, templates/tls.yaml.j2).
 # (One Ingress with a tls: block would make Traefik serve that host on https only.)
 {% set routes = {
   'grafana':   [('/', 'grafana', 80)],
@@ -11,8 +11,8 @@
   'alloy':     [('/v1/', 'alloy', 4318), ('/ingest', 'alloy', 9999), ('/', 'alloy', 12345)],
   'garage':    [('/', 'garage', 3900)],
 } %}
-{# only hostnames that exist in service_vips (commenting one out there removes its ingresses) #}
-{% for name, paths in routes.items() if name in service_vips %}
+{# only hostnames listed in lgtm_hosts (removing one there removes its ingresses) #}
+{% for name, paths in routes.items() if name in lgtm_hosts %}
 {% for scheme in ['http', 'https'] %}
 ---
 apiVersion: networking.k8s.io/v1
@@ -22,21 +22,16 @@ metadata:
   namespace: lgtm
   labels: { lgtm/set: ingress }
   annotations:
-{% if scheme == 'http' %}
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-{% else %}
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    cert-manager.io/cluster-issuer: {{ tls_issuer.name }}
-{% endif %}
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ 'web' if scheme == 'http' else 'websecure' }}
 spec:
   ingressClassName: traefik
 {% if scheme == 'https' %}
   tls:
-    - hosts: [{{ service_vips[name].host }}]
-      secretName: {{ name }}-tls
+    - hosts: ["{{ name }}.{{ domain }}"]
+      secretName: lgtm-wildcard-tls
 {% endif %}
   rules:
-    - host: {{ service_vips[name].host }}
+    - host: {{ name }}.{{ domain }}
       http:
         paths:
 {% for path, svc, port in paths %}

@@ -1,5 +1,6 @@
 # LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
 #   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
+#   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
 #   ansible-playbook -i lab/inventory lab/external.yml -K
 - name: External services (Keycloak, Pebble)
@@ -12,7 +13,21 @@
   tasks:
     - name: Directories for generated configs
       ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }
-      loop: [keycloak, pebble]
+      loop: [keycloak, pebble, bind]
+
+    - name: Writable zone directory (named runs as user bind in the container)
+      ansible.builtin.file: { path: "{{ gen }}/bind/zones", state: directory, mode: "0777" }
+
+    - name: BIND configuration (zone + TSIG key)
+      ansible.builtin.template: { src: templates/named.conf.j2, dest: "{{ gen }}/bind/named.conf", mode: "0644" }
+      register: bind_config
+
+    - name: Zone seed (only once; BIND owns the zone afterwards)
+      ansible.builtin.template:
+        src: templates/zone.j2
+        dest: "{{ gen }}/bind/zones/{{ domain }}.zone"
+        mode: "0666"
+        force: false
 
     # Pebble's ACME API speaks TLS. cert-manager reaches it by IP, so the certificate needs an IP SAN; the CA
     # below is what tls_issuer.ca_bundle_file points to.
@@ -62,18 +77,23 @@
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
 
-    # the realm is only imported when it doesn't exist; config changes of Pebble need a restart
-    - name: Restart Pebble after a config change
+    # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
+    - name: Restart after a config change
       ansible.builtin.command:
-        cmd: docker compose restart pebble
+        cmd: "docker compose restart {{ item.name }}"
         chdir: "{{ repo_dir }}/lab/external"
       become: true
-      when: pebble_config.changed
+      loop:
+        - { name: pebble, changed: "{{ pebble_config.changed }}" }
+        - { name: bind, changed: "{{ bind_config.changed }}" }
+      when: item.changed | bool
 
     - name: Next steps
       ansible.builtin.debug:
         msg:
           - "/etc/hosts on this machine:  {{ external_host_ip }} {{ oauth.hostname }}"
+          - "                             {{ ingress_vip }} {{ lgtm_hosts | map('regex_replace', '$', '.' ~ domain) | join(' ') }}"
+          - "(or use the lab DNS: dig @{{ external_host_ip }} -p 5353 grafana.{{ domain }})"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }} (passwords in .secrets/keycloak_user_<name>)"
           - "Then: ansible-playbook -i lab/inventory ansible/lgtm.yml"

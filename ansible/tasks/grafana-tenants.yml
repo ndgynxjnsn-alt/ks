@@ -3,8 +3,8 @@
 # Idempotent: existing orgs/datasources are updated in place. Var: tenant ({name, dashboards}).
 - name: "Grafana org {{ tenant.name }}"
   vars:
-    grafana_api: "http://{{ service_vips.grafana.ip }}/api"
-    grafana_headers: { Host: "{{ service_vips.grafana.host }}" }
+    grafana_api: "http://{{ ingress_vip }}/api"
+    grafana_headers: { Host: "grafana.{{ domain }}" }
   block:
     - name: Wait for the Grafana API
       ansible.builtin.uri:

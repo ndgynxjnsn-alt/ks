@@ -1,0 +1,23 @@
+// {{ ansible_managed }}
+// LAB: authoritative DNS for {{ domain }} (no recursion). cert-manager updates the ACME challenge records
+// with RFC2136, authenticated by the TSIG key; Pebble reads them to validate DNS-01.
+options {
+  directory "/var/cache/bind";
+  listen-on { any; };
+  listen-on-v6 { none; };
+  recursion no;
+  allow-query { any; };
+  dnssec-validation no;
+};
+
+key "{{ tls_issuer.dns01.tsig_key_name }}" {
+  algorithm {{ tls_issuer.dns01.tsig_algorithm | lower | regex_replace('^hmac', 'hmac-') }};
+  secret "{{ tls_issuer.dns01.tsig_secret }}";
+};
+
+zone "{{ domain }}" {
+  type primary;
+  file "/var/lib/bind/{{ domain }}.zone";
+  // the key may only touch the challenge records (one name covers *.{{ domain }} and {{ domain }})
+  update-policy { grant {{ tls_issuer.dns01.tsig_key_name }} name _acme-challenge.{{ domain }}. TXT; };
+};

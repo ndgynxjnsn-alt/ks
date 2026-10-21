@@ -1,9 +1,8 @@
 # {{ ansible_managed }}
-# The company CA as certificate issuer: ACME with External Account Binding (EAB). The CA hands out a key id
-# (eab_kid) and an HMAC key (eab_hmac_key, base64url); cert-manager signs its ACME account registration with
-# them, so only accounts bound to that external account get certificates. Challenge: HTTP-01, the CA fetches
-# a token from http://<host>/.well-known/acme-challenge/ (cert-manager adds a temporary Traefik route).
-# Lab: the CA is Pebble from external/ (ansible/external.yml). Settings: tls_issuer in group_vars.
+# One wildcard certificate *.{{ domain }} for all hostnames, from the CA via ACME with External Account
+# Binding (EAB key id + HMAC key: only that external account gets certificates). Wildcards need the DNS-01
+# challenge: cert-manager writes _acme-challenge.{{ domain }} TXT records with RFC2136 dynamic updates,
+# authenticated by a TSIG key, into the zone on {{ tls_issuer.dns01.nameserver }}. Settings: tls_issuer.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -13,6 +12,16 @@ metadata:
 type: Opaque
 stringData:
   hmac-key: "{{ tls_issuer.eab_hmac_key }}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ tls_issuer.name }}-tsig
+  namespace: cert-manager
+  labels: { lgtm/set: tls }
+type: Opaque
+stringData:
+  tsig-secret: "{{ tls_issuer.dns01.tsig_secret }}"
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -35,6 +44,23 @@ spec:
     privateKeySecretRef:
       name: {{ tls_issuer.name }}-acme-account
     solvers:
-      - http01:
-          ingress:
-            ingressClassName: traefik
+      - dns01:
+          rfc2136:
+            nameserver: "{{ tls_issuer.dns01.nameserver }}"
+            tsigKeyName: {{ tls_issuer.dns01.tsig_key_name }}
+            tsigAlgorithm: {{ tls_issuer.dns01.tsig_algorithm }}
+            tsigSecretSecretRef:
+              name: {{ tls_issuer.name }}-tsig
+              key: tsig-secret
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: lgtm-wildcard
+  namespace: lgtm
+  labels: { lgtm/set: tls }
+spec:
+  secretName: lgtm-wildcard-tls     # used by every https Ingress
+  dnsNames: ["*.{{ domain }}", "{{ domain }}"]
+  issuerRef: { kind: ClusterIssuer, name: {{ tls_issuer.name }} }
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }

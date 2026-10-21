@@ -1,0 +1,7 @@
+; {{ ansible_managed }}  (seed only; BIND keeps dynamic updates in the .jnl journal)
+$TTL 60
+@   IN SOA ns.{{ domain }}. hostmaster.{{ domain }}. ( 1 60 60 3600 60 )
+@   IN NS  ns.{{ domain }}.
+ns  IN A   {{ external_host_ip }}
+@   IN A   {{ ingress_vip }}
+*   IN A   {{ ingress_vip }}

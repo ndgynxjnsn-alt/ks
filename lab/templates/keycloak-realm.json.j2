@@ -20,15 +20,15 @@
       "secret": "{{ oauth_client_secret }}",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "rootUrl": "https://{{ service_vips.grafana.host }}",
+      "rootUrl": "https://grafana.{{ domain }}",
       "redirectUris": [
-        "https://{{ service_vips.grafana.host }}/login/generic_oauth",
-        "http://{{ service_vips.grafana.host }}/login/generic_oauth"
+        "https://grafana.{{ domain }}/login/generic_oauth",
+        "http://grafana.{{ domain }}/login/generic_oauth"
       ],
-      "webOrigins": ["https://{{ service_vips.grafana.host }}", "http://{{ service_vips.grafana.host }}"],
+      "webOrigins": ["https://grafana.{{ domain }}", "http://grafana.{{ domain }}"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://{{ service_vips.grafana.host }}/login##http://{{ service_vips.grafana.host }}/login"
+        "post.logout.redirect.uris": "https://grafana.{{ domain }}/login##http://grafana.{{ domain }}/login"
       },
       "protocolMappers": [
         {

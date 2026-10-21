@@ -1,9 +1,10 @@
-# Services outside the cluster, on the Ansible host. Configs with secrets are rendered into .generated/ by
-#   ansible-playbook -i lab/inventory lab/external.yml -K   (which also runs: sudo docker compose up -d)
+# LAB ONLY: stand-ins for company services, on the Ansible host. Configs with secrets are rendered into
+# .generated/ by   ansible-playbook -i lab/inventory lab/external.yml -K   (which also runs docker compose up).
 #
-#   keycloak  http://keycloak.org:8080   OAuth/OIDC for Grafana (realm "lgtm", client "grafana")
-#   pebble    https://192.168.56.1:14000/dir   ACME server with External Account Binding, stands in for the
-#             company CA; it validates HTTP-01 challenges on the cluster hostnames (extra_hosts below).
+#   keycloak  http://keycloak.company.org:8080   OAuth/OIDC for Grafana (realm "lgtm", client "grafana")
+#   pebble    https://192.168.56.1:14000/dir     ACME server with External Account Binding (the "company CA")
+#   bind      192.168.56.1:5353 (udp+tcp)        authoritative DNS for lgtm.company.org: *.lgtm.company.org
+#                                                -> ingress VIP, RFC2136 updates with the TSIG key (DNS-01)
 name: lgtm-external
 
 services:
@@ -12,7 +13,7 @@ services:
     command: ["start-dev", "--import-realm"]   # imports .generated/keycloak/*.json if the realm doesn't exist
     env_file: ./.generated/keycloak.env        # KC_BOOTSTRAP_ADMIN_USERNAME / _PASSWORD
     environment:
-      KC_HOSTNAME: http://keycloak.org:8080    # one issuer URL for browsers and for Grafana
+      KC_HOSTNAME: http://keycloak.company.org:8080   # one issuer URL for browsers and for Grafana
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HTTP_PORT: "8080"
       KC_HEALTH_ENABLED: "true"
@@ -22,7 +23,8 @@ services:
 
   pebble:
     image: ghcr.io/letsencrypt/pebble:2.10.1
-    command: ["-config", "/config/pebble-config.json"]
+    # DNS-01: Pebble looks up the _acme-challenge TXT records on the lab DNS server
+    command: ["-config", "/config/pebble-config.json", "-dnsserver", "bind:53"]
     environment:
       PEBBLE_VA_NOSLEEP: "1"                   # validate challenges immediately
       PEBBLE_WFE_NONCEREJECT: "0"              # don't reject nonces at random (Pebble's default chaos)
@@ -30,14 +32,16 @@ services:
       - "14000:14000"                          # ACME API (TLS cert from .generated/pebble/acme.crt)
       - "15000:15000"                          # management: /roots/0 = root of the issued certificates
     volumes: ["./.generated/pebble:/config:ro"]
-    # HTTP-01 validation connects to http://<hostname>/.well-known/acme-challenge/ - the cluster VIPs
-    # (keep in sync with service_vips in ansible/group_vars/all.yml)
-    extra_hosts:
-      - "grafana.org:192.168.56.21"
-      - "loki.org:192.168.56.22"
-      - "tempo.org:192.168.56.23"
-      - "mimir.org:192.168.56.24"
-      - "pyroscope.org:192.168.56.25"
-      - "alloy.org:192.168.56.26"
-      - "garage.org:192.168.56.27"
+    depends_on: [bind]
+    restart: unless-stopped
+
+  bind:
+    image: internetsystemsconsortium/bind9:9.20
+    command: ["-g", "-c", "/etc/bind/named.conf"]   # foreground, log to stderr
+    ports:
+      - "5353:53/udp"                          # 53 on the lab bridge is taken by libvirt's dnsmasq
+      - "5353:53/tcp"
+    volumes:
+      - ./.generated/bind/named.conf:/etc/bind/named.conf:ro
+      - ./.generated/bind/zones:/var/lib/bind  # writable: dynamic updates + journal
     restart: unless-stopped

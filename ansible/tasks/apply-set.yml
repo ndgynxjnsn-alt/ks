@@ -1,5 +1,5 @@
 # Applies a rendered manifest as a named "set" and deletes objects of that set that are no longer rendered
-# (e.g. a hostname removed from service_vips). Every object in the manifest must carry the label
+# (e.g. a hostname removed from lgtm_hosts). Every object in the manifest must carry the label
 # lgtm/set: <set_name>.   Vars: set_name, manifest (YAML string), set_kinds (kubectl resource names)
 - name: "Apply {{ set_name }}"
   ansible.builtin.command:

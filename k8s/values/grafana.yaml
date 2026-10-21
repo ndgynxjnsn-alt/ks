@@ -48,9 +48,7 @@ grafana.ini:
     ha_peers: grafana-headless.lgtm.svc:9094
     ha_listen_address: "$__env{POD_IP}:9094"
     ha_advertise_address: "$__env{POD_IP}:9094"
-  server:
-    domain: grafana.org
-    root_url: https://grafana.org   # absolute links; the UI also works on http://grafana.org
+  # server.domain / root_url: from the site's domain (ansible/lgtm.yml)
   analytics:
     reporting_enabled: false
     check_for_updates: false

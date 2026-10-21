@@ -57,5 +57,5 @@ grafana_admin_password: "{{ lookup('password', secrets_dir + '/grafana_admin_pas
 
 garage_buckets: [loki-chunks, loki-ruler, tempo-traces, mimir-blocks, mimir-ruler, mimir-alertmanager, pyroscope-data]
 
-# Pods behind the per-hostname web VIPs: RKE2's bundled Traefik.
+# Pods behind the ingress VIP: RKE2's bundled Traefik.
 traefik_selector: { app.kubernetes.io/name: rke2-traefik }

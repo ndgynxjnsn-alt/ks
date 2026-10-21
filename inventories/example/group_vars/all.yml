@@ -1,0 +1,36 @@
+# Site settings of a real environment (everything here is required). The lab equivalent with working
+# values is lab/inventory/group_vars/all.yml. Keep secrets in ansible-vault (vault_* variables).
+
+# ---------------------------------------------------------------- network
+vip: 10.0.10.10            # free IP in the servers' subnet: Kubernetes API (6443) + RKE2 join (9345)
+ingress_vip: 10.0.10.20    # free IP in the same subnet: all LGTM hostnames (Traefik)
+domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage]
+
+# ---------------------------------------------------------------- tenants
+tenants:
+  - name: platform
+    dashboards: []
+
+# ---------------------------------------------------------------- TLS: company CA (ACME + EAB, DNS-01 via RFC2136)
+tls_issuer:
+  name: company-ca
+  acme_server: https://ca.company.org/acme/directory
+  email: observability@company.org
+  eab_kid: "{{ vault_acme_eab_kid }}"
+  eab_hmac_key: "{{ vault_acme_eab_hmac_key }}"
+  ca_bundle_file: ""                       # "" if the ACME endpoint has a publicly trusted certificate
+  dns01:
+    nameserver: 10.0.0.53:53               # primary DNS server of the zone lgtm.company.org
+    tsig_key_name: lgtm-acme
+    tsig_algorithm: HMACSHA256
+    tsig_secret: "{{ vault_dns_tsig_secret }}"
+    # recursive_nameservers: 10.0.0.53:53  # only if public resolvers can't see the zone
+
+# ---------------------------------------------------------------- OAuth: company IdP (OIDC)
+oauth:
+  enabled: true
+  hostname: sso.company.org
+  issuer: https://sso.company.org/realms/company
+  client_id: grafana-lgtm
+oauth_client_secret: "{{ vault_oauth_client_secret }}"

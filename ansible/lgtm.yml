@@ -10,7 +10,11 @@
       - name: cert-manager
         namespace: cert-manager
         chart: "cert-manager-{{ charts['cert-manager'].version }}.tgz"
-        secrets: {}
+        # DNS-01 propagation check against the zone's own server (zones invisible to public resolvers)
+        secrets: >-
+          {{ {'extraArgs': ['--dns01-recursive-nameservers-only',
+                            '--dns01-recursive-nameservers=' ~ tls_issuer.dns01.recursive_nameservers]}
+             if tls_issuer.dns01.recursive_nameservers is defined else {} }}
       - name: cloudnative-pg
         namespace: cnpg-system
         chart: "cloudnative-pg-{{ charts['cloudnative-pg'].version }}.tgz"
@@ -38,7 +42,11 @@
         chart: "grafana-{{ charts.grafana.version }}.tgz"
         secrets: "{{ grafana_overlay | combine(grafana_oauth_overlay if oauth.enabled else {}, recursive=true) }}"
     grafana_overlay:
-          adminPassword: "{{ grafana_admin_password }}"          # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
+          adminPassword: "{{ grafana_admin_password }}"
+          grafana.ini:
+            server:
+              domain: "grafana.{{ domain }}"
+              root_url: "https://grafana.{{ domain }}"   # absolute links; the UI also works on http          # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
           datasources:
             datasources.yaml:
               apiVersion: 1
@@ -65,7 +73,7 @@
           auth_url: "{{ oauth.issuer }}/protocol/openid-connect/auth"
           token_url: "{{ oauth.issuer }}/protocol/openid-connect/token"
           api_url: "{{ oauth.issuer }}/protocol/openid-connect/userinfo"
-          signout_redirect_url: "{{ oauth.issuer }}/protocol/openid-connect/logout?client_id={{ oauth.client_id }}&post_logout_redirect_uri=https%3A%2F%2F{{ service_vips.grafana.host }}%2Flogin"
+          signout_redirect_url: "{{ oauth.issuer }}/protocol/openid-connect/logout?client_id={{ oauth.client_id }}&post_logout_redirect_uri=https%3A%2F%2Fgrafana.{{ domain }}%2Flogin"
           login_attribute_path: preferred_username
           email_attribute_path: email
           name_attribute_path: name
@@ -154,10 +162,10 @@
       ansible.builtin.include_tasks: tasks/apply-set.yml
       vars:
         set_name: tls
-        set_kinds: [clusterissuers, secrets]
+        set_kinds: [clusterissuers, secrets, certificates.cert-manager.io]
         manifest: "{{ lookup('template', 'templates/tls.yaml.j2') }}"
 
-    - name: Ingresses (http + https per hostname)
+    - name: Ingresses (http + https per hostname, wildcard certificate)
       ansible.builtin.include_tasks: tasks/apply-set.yml
       vars:
         set_name: ingress
@@ -172,5 +180,5 @@
     - name: Done
       ansible.builtin.debug:
         msg:
-          - "Grafana: http(s)://grafana.org  user admin, password in .secrets/grafana_admin_password"
-          - "/etc/hosts: {{ service_vips.values() | map(attribute='ip') | zip(service_vips.values() | map(attribute='host')) | map('join', ' ') | list }}"
+          - "Grafana: http(s)://grafana.{{ domain }}  user admin, password in .secrets/grafana_admin_password"
+          - "DNS / hosts file: {{ ingress_vip }} {{ lgtm_hosts | map('regex_replace', '$', '.' ~ domain) | join(' ') }}"

@@ -1,23 +1,21 @@
 # {{ ansible_managed }}
-# One LoadBalancer Service per hostname, each with its own floating IP (kube-vip, per-service leader election).
-# All hostnames lead to Traefik (http 80 + https 443), which routes by Host header (templates/ingress.yaml.j2).
-# externalTrafficPolicy
-# Local: traffic is served by the Traefik pod on the node that currently holds the IP (no extra hop).
+# The floating IP for everything LGTM: one LoadBalancer Service (kube-vip, address from the
+# kube-vip.io/loadbalancerIPs annotation) in front of Traefik, which routes *.{{ domain }} by Host header
+# (templates/ingress.yaml.j2). externalTrafficPolicy Local: the Traefik pod on the node that holds the IP
+# serves the traffic. The Kubernetes API has its own VIP {{ vip }} (kube-vip control plane mode).
 apiVersion: v1
 kind: Namespace
 metadata:
   name: lgtm
-{% for name, v in service_vips.items() %}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: vip-{{ name }}
+  name: vip-ingress
   namespace: kube-system
   labels: { lgtm/set: vips }
   annotations:
-    kube-vip.io/loadbalancerIPs: "{{ v.ip }}"
-    lgtm/hostname: {{ v.host }}
+    kube-vip.io/loadbalancerIPs: "{{ ingress_vip }}"
 spec:
   type: LoadBalancer
   externalTrafficPolicy: Local
@@ -25,10 +23,9 @@ spec:
   ports:
     - { name: web, port: 80, targetPort: web }
     - { name: websecure, port: 443, targetPort: websecure }
-{% endfor %}
 ---
 # Garage runs on the nodes, outside Kubernetes: a Service without selector whose endpoints are the nodes.
-# In-cluster S3 endpoint {{ s3_endpoint }}; from outside via Traefik as {{ service_vips.garage.host }}.
+# In-cluster S3 endpoint {{ s3_endpoint }}; from outside via Traefik as garage.{{ domain }}.
 apiVersion: v1
 kind: Service
 metadata:
