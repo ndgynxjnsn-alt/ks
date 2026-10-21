@@ -1,5 +1,5 @@
 # Services outside the cluster, on the Ansible host. Configs with secrets are rendered into .generated/ by
-#   ansible-playbook ansible/external.yml -K      (which also runs: sudo docker compose up -d)
+#   ansible-playbook -i lab/inventory lab/external.yml -K   (which also runs: sudo docker compose up -d)
 #
 #   keycloak  http://keycloak.org:8080   OAuth/OIDC for Grafana (realm "lgtm", client "grafana")
 #   pebble    https://192.168.56.1:14000/dir   ACME server with External Account Binding, stands in for the

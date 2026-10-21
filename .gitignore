@@ -6,4 +6,4 @@ apps/demo/target/
 *.tar
 *.log
 artifacts/
-external/.generated/
+lab/external/.generated/

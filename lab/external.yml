@@ -1,13 +1,14 @@
-# Services outside the cluster on the Ansible host (external/docker-compose.yml):
+# LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
 #   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
-# Renders their configs (with secrets) into external/.generated/ and starts them with sudo docker compose.
-#   ansible-playbook ansible/external.yml -K
+# Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
+#   ansible-playbook -i lab/inventory lab/external.yml -K
 - name: External services (Keycloak, Pebble)
   hosts: localhost
   connection: local
   gather_facts: false
+  vars_files: [../ansible/group_vars/all.yml]   # shared paths and generated secrets
   vars:
-    gen: "{{ repo_dir }}/external/.generated"
+    gen: "{{ repo_dir }}/lab/external/.generated"
   tasks:
     - name: Directories for generated configs
       ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }
@@ -34,14 +35,14 @@
 
     - name: Pebble configuration (EAB key id + HMAC key from tls_issuer)
       ansible.builtin.template:
-        src: templates/external/pebble-config.json.j2
+        src: templates/pebble-config.json.j2
         dest: "{{ gen }}/pebble/pebble-config.json"
         mode: "0644"
       register: pebble_config
 
     - name: Keycloak realm (client, groups, users)
       ansible.builtin.template:
-        src: templates/external/keycloak-realm.json.j2
+        src: templates/keycloak-realm.json.j2
         dest: "{{ gen }}/keycloak/lgtm-realm.json"
         mode: "0644"
 
@@ -56,7 +57,7 @@
     - name: Start the containers
       ansible.builtin.command:
         cmd: docker compose up -d
-        chdir: "{{ repo_dir }}/external"
+        chdir: "{{ repo_dir }}/lab/external"
       become: true
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
@@ -65,7 +66,7 @@
     - name: Restart Pebble after a config change
       ansible.builtin.command:
         cmd: docker compose restart pebble
-        chdir: "{{ repo_dir }}/external"
+        chdir: "{{ repo_dir }}/lab/external"
       become: true
       when: pebble_config.changed
 
@@ -75,4 +76,4 @@
           - "/etc/hosts on this machine:  {{ external_host_ip }} {{ oauth.hostname }}"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }} (passwords in .secrets/keycloak_user_<name>)"
-          - "Then: ansible-playbook ansible/lgtm.yml  (ClusterIssuer with EAB, Grafana OAuth)"
+          - "Then: ansible-playbook -i lab/inventory ansible/lgtm.yml"

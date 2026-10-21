@@ -38,76 +38,8 @@ otel_agent_version: 2.32.0
 pyroscope_agent_version: 2.9.2   # Pyroscope Java agent (async-profiler)
 pyroscope_otel_version: 2.1.4    # OTel extension: stamps profiles with span ids/names (trace <-> profile)
 
-# ---------------------------------------------------------------- tenants
-# Loki, Mimir, Tempo and Pyroscope run multi-tenant: every write and query carries X-Scope-OrgID.
-# Each tenant gets a Grafana organization of the same name whose datasources only see that tenant;
-# Grafana's Main org sees all tenants (cross-tenant queries). Senders set the tenant themselves:
-#   OTLP:      header X-Scope-OrgID=<tenant>   (e.g. OTEL_EXPORTER_OTLP_HEADERS)
-#   profiles:  label tenant=<tenant>           (e.g. PYROSCOPE_LABELS); Alloy routes per tenant
-#   pod logs:  tenant "platform" (set by Alloy)
-# Adding a tenant: add it here, and add its pyroscope.relabel/write pair in k8s/values/alloy.yaml.
-tenants:
-  - name: demo                     # the demo shop
-    dashboards: [lgtm-demo.json]   # from k8s/dashboards, imported into the tenant's Grafana org
-  - name: platform                 # logs of the cluster itself (all namespaces except demo)
-    dashboards: []
-
-# ---------------------------------------------------------------- network
-# Control-plane VIP: Kubernetes API (6443) and RKE2 join (9345).
-vip: 192.168.56.10
-# One floating IP per hostname. kube-vip elects a leader per IP, so they spread over the nodes and every
-# hostname enters the cluster on a different server: a "natural" load balancer. Point DNS / /etc/hosts here.
-service_vips:
-  grafana:   { ip: 192.168.56.21, host: grafana.org }
-  loki:      { ip: 192.168.56.22, host: loki.org }
-  tempo:     { ip: 192.168.56.23, host: tempo.org }
-  mimir:     { ip: 192.168.56.24, host: mimir.org }
-  pyroscope: { ip: 192.168.56.25, host: pyroscope.org }
-  alloy:     { ip: 192.168.56.26, host: alloy.org }
-  garage:    { ip: 192.168.56.27, host: garage.org }
 # In-cluster S3 endpoint: Service "garage" whose endpoints are the Garage daemons on the nodes.
 s3_endpoint: garage.lgtm.svc:3900
-
-# ---------------------------------------------------------------- services outside the cluster (external/)
-# Keycloak (OAuth for Grafana) and Pebble (a small ACME server standing in for the company CA) run with
-# docker-compose on the Ansible host: ansible-playbook ansible/external.yml -K
-external_host_ip: 192.168.56.1     # the Ansible host on the lab network, reachable from the nodes
-keycloak_version: 26.8.1
-pebble_version: 2.10.1
-
-# ---------------------------------------------------------------- TLS
-# Every hostname is served on http (80) and https (443). cert-manager requests the certificates from the
-# company CA via ACME with External Account Binding (the CA hands out a key id + HMAC key) and the HTTP-01
-# challenge over port 80, and renews them automatically (default: 1/3 of the lifetime before expiry).
-# Until a certificate is issued, Traefik answers https with its self-signed default certificate.
-#
-# Lab values point at Pebble from external/. For the company CA replace acme_server, email, eab_kid and
-# eab_hmac_key (e.g. in ansible-vault) and set ca_bundle_file to its root CA (or "" if publicly trusted).
-tls_issuer:
-  name: company-ca
-  acme_server: "https://{{ external_host_ip }}:14000/dir"     # ACME directory URL
-  email: observability@example.corp                          # ACME account contact
-  eab_kid: lgtm-observability                                # EAB key id issued by the CA
-  eab_hmac_key: "{{ lookup('password', secrets_dir + '/acme_eab_hmac_key chars=ascii_letters,digits length=64') }}"
-  # PEM of the CA that signed the ACME server's TLS certificate (path on the Ansible host)
-  ca_bundle_file: "{{ repo_dir }}/external/.generated/pebble/acme-ca.crt"
-
-# ---------------------------------------------------------------- OAuth (Grafana <-> Keycloak)
-# Users and groups live in the Keycloak realm (ansible/templates/external/keycloak-realm.json.j2).
-# Group -> Grafana org/role:  grafana-admins -> Grafana server admin + Admin in all orgs,
-#                             tenant-<name>  -> Editor in the org of that tenant
-oauth:
-  enabled: true
-  hostname: keycloak.org                       # resolved to external_host_ip (hosts file / pod hostAliases)
-  issuer: http://keycloak.org:8080/realms/lgtm
-  client_id: grafana
-oauth_client_secret: "{{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}"
-keycloak_admin_password: "{{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}"
-# lab users of the realm (password files in .secrets/keycloak_user_<name>)
-keycloak_users:
-  - { name: admin-user, email: admin@example.corp, groups: [grafana-admins] }
-  - { name: alice, email: alice@example.corp, groups: [tenant-demo] }
-  - { name: bob, email: bob@example.corp, groups: [tenant-platform] }
 
 # ---------------------------------------------------------------- paths on the Ansible host
 repo_dir: "{{ playbook_dir | dirname }}"

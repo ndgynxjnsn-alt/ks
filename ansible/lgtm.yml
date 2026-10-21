@@ -48,8 +48,7 @@
     #   grafana-admins -> Admin in every org + Grafana server admin;  tenant-<name> -> Editor in org <name>
     # auto_assign_org is off, so tenant users don't land in the Main org (which sees all tenants).
     grafana_oauth_overlay:
-      hostAliases:
-        - { ip: "{{ external_host_ip }}", hostnames: ["{{ oauth.hostname }}"] }
+      hostAliases: "{{ [{'ip': oauth.host_ip, 'hostnames': [oauth.hostname]}] if oauth.host_ip is defined else [] }}"
       envValueFrom:
         GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
           secretKeyRef: { name: grafana-oauth, key: client-secret }
