@@ -1,0 +1,5 @@
+apiVersion: v2
+name: lgtm-platform
+description: Cluster-level resources of the LGTM stack - ingress VIP, ingresses, TLS, Grafana database, dashboards
+type: application
+version: 1.0.0

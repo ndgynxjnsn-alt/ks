@@ -1,0 +1,49 @@
+{{- /* One wildcard certificate *.<domain> for all hostnames, from the CA via ACME with External Account
+       Binding. Wildcards need DNS-01: cert-manager writes _acme-challenge.<domain> TXT records with RFC2136
+       dynamic updates (TSIG). The EAB HMAC key and TSIG secret are Secrets created by Ansible. */ -}}
+{{- with .Values.tls }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .issuer }}
+spec:
+  acme:
+    server: {{ .acmeServer }}
+    email: {{ .email }}
+    {{- if .caBundle }}
+    caBundle: {{ .caBundle }}     # CA of the ACME server's own TLS certificate
+    {{- end }}
+    externalAccountBinding:
+      keyID: {{ .eabKeyID }}
+      keySecretRef: { name: {{ .issuer }}-eab, key: hmac-key }
+    privateKeySecretRef: { name: {{ .issuer }}-acme-account }
+    solvers:
+      - dns01:
+          rfc2136:
+            nameserver: {{ .dns01.nameserver | quote }}
+            tsigKeyName: {{ .dns01.tsigKeyName }}
+            tsigAlgorithm: {{ .dns01.tsigAlgorithm }}
+            tsigSecretSecretRef: { name: {{ .issuer }}-tsig, key: tsig-secret }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: lgtm-wildcard
+  namespace: lgtm
+spec:
+  secretName: lgtm-wildcard-tls
+  dnsNames: ["*.{{ $.Values.domain }}", "{{ $.Values.domain }}"]
+  issuerRef: { kind: ClusterIssuer, name: {{ .issuer }} }
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+{{- end }}
+---
+# Traefik serves the wildcard certificate for every https route (also Ingresses in other namespaces).
+# Until it is issued, Traefik falls back to its self-signed default certificate.
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: lgtm
+spec:
+  defaultCertificate:
+    secretName: lgtm-wildcard-tls

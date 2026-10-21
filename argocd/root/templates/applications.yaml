@@ -1,0 +1,53 @@
+{{- /* One Application per entry in .Values.apps. Child apps sync automatically (prune + self-heal);
+       the root app waits for each wave's Applications to be healthy (health check in argocd-cm). */ -}}
+{{- range $name, $app := .Values.apps }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $name }}
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $app.wave | default 0 | quote }}
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ $app.namespace | default "lgtm" }}
+  {{- if $app.path }}
+  source:
+    repoURL: {{ $.Values.repo.git }}
+    targetRevision: {{ $.Values.repo.revision }}
+    path: {{ $app.path }}
+    {{- with $app.values }}
+    helm:
+      valuesObject:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  sources:
+    - repoURL: {{ $.Values.repo.helm }}
+      chart: {{ $app.chart | default $name }}
+      targetRevision: {{ $app.version | quote }}
+      helm:
+        releaseName: {{ $name }}
+        valueFiles: ["$values/k8s/values/{{ $app.valuesFile | default $name }}.yaml"]
+        {{- with $app.values }}
+        valuesObject:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    - repoURL: {{ $.Values.repo.git }}
+      targetRevision: {{ $.Values.repo.revision }}
+      ref: values
+  {{- end }}
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true                    # large CRDs (cert-manager, CloudNativePG)
+      - SkipDryRunOnMissingResource=true        # CRs whose CRD arrives in the same wave
+    retry:
+      limit: 20
+      backoff: { duration: 15s, factor: 2, maxDuration: 5m }
+{{- end }}

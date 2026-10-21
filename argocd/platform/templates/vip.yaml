@@ -1,0 +1,41 @@
+{{- /* The floating IP for everything LGTM: one LoadBalancer Service (kube-vip, address from the annotation)
+       in front of Traefik, which routes *.<domain> by Host header. externalTrafficPolicy Local: the Traefik
+       pod on the node that holds the IP serves the traffic. */ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: vip-ingress
+  namespace: kube-system
+  annotations:
+    kube-vip.io/loadbalancerIPs: {{ .Values.ingressVIP | quote }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector: {{ toJson .Values.traefikSelector }}
+  ports:
+    - { name: web, port: 80, targetPort: web }
+    - { name: websecure, port: 443, targetPort: websecure }
+---
+# Garage runs on the nodes, outside Kubernetes: a Service without selector whose endpoints are the nodes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  namespace: lgtm
+spec:
+  ports:
+    - { name: s3, port: 3900 }
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: garage-nodes
+  namespace: lgtm
+  labels: { kubernetes.io/service-name: garage }
+addressType: IPv4
+ports:
+  - { name: s3, port: 3900, protocol: TCP }
+endpoints:
+  {{- range .Values.nodes }}
+  - addresses: [{{ . | quote }}]
+  {{- end }}

@@ -1,0 +1,12 @@
+# Set by ansible/lgtm.yml (root Application, helm.valuesObject) from the inventory; defaults for reference.
+repo:
+  git: ""            # this repository, as Argo CD reaches it
+  revision: main
+  helm: ""           # Helm repository with all charts of artifacts/charts
+# apps.<name>:
+#   chart/version  upstream chart from repo.helm, values from $values/k8s/values/<valuesFile|name>.yaml
+#   path           or: a directory/chart in this repository
+#   namespace      target namespace (default lgtm)
+#   wave           sync wave of the Application (CRD providers first)
+#   values         extra values (site-specific overlay), passed as helm.valuesObject
+apps: {}

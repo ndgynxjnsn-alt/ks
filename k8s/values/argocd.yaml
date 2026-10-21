@@ -1,0 +1,35 @@
+# Argo CD: installed once by ansible/lgtm.yml (Helm), then manages everything else from Git
+# (app of apps: argocd/root). UI at argocd.<domain> via Traefik, so the server runs without TLS itself.
+fullnameOverride: argocd
+dex: { enabled: false }
+notifications: { enabled: false }
+configs:
+  params:
+    server.insecure: true
+  cm:
+    timeout.reconciliation: 60s
+    # Argo CD does not assess the health of Application resources by default; without it the root app
+    # would not wait for one sync wave of child Applications to be healthy before starting the next.
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil and obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then
+          hs.message = obj.status.health.message
+        end
+      end
+      return hs
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+server:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }

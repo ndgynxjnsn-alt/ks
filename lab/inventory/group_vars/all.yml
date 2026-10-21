@@ -11,7 +11,20 @@ ingress_vip: 192.168.56.20    # every LGTM hostname -> Traefik, which routes by 
 # wildcard certificate *.<domain>. DNS: *.<domain> -> ingress_vip (lab: BIND in lab/external + /etc/hosts).
 domain: lgtm.company.org
 # Hostnames served on the ingress VIP (backends: ansible/templates/ingress.yaml.j2). Remove one to unpublish it.
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
+
+# ---------------------------------------------------------------- GitOps (Argo CD)
+# Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts). Lab: both on
+# Gitea from lab/external; lgtm.yml pushes the committed HEAD and uploads the charts (gitops.publish).
+gitops:
+  repo_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
+  revision: main
+  helm_repo_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm"
+  publish:
+    git_push_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
+    helm_upload_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm/api/charts"
+    username: lgtm
+    password: "{{ lookup('password', secrets_dir + '/gitea_password chars=ascii_letters,digits length=20') }}"
 
 # ---------------------------------------------------------------- tenants
 # Loki, Mimir, Tempo and Pyroscope run multi-tenant: every write and query carries X-Scope-OrgID.
@@ -33,6 +46,7 @@ tenants:
 external_host_ip: 192.168.56.1     # the Ansible host on the lab network, reachable from the nodes
 keycloak_version: 26.8.1
 pebble_version: 2.10.1
+gitea_version: 1.27.3
 bind_version: "9.20"
 
 # ---------------------------------------------------------------- TLS

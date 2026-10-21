@@ -1,6 +1,7 @@
 # LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
 #   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
 #   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
+#   Gitea    - Git + Helm repository for Argo CD
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
 #   ansible-playbook -i lab/inventory lab/external.yml -K
 - name: External services (Keycloak, Pebble)
@@ -76,6 +77,25 @@
       become: true
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
+
+    - name: Wait for Gitea
+      ansible.builtin.uri: { url: "http://127.0.0.1:3000/api/healthz" }
+      register: gitea_health
+      until: gitea_health.status == 200
+      retries: 30
+      delay: 5
+
+    - name: Gitea user owning the repository and the Helm charts
+      ansible.builtin.command:
+        argv: [docker, compose, exec, -T, gitea, gitea, admin, user, create, --admin, --username,
+               "{{ gitops.publish.username }}", --password, "{{ gitops.publish.password }}",
+               --email, "{{ gitops.publish.username }}@example.corp", --must-change-password=false]
+        chdir: "{{ repo_dir }}/lab/external"
+      become: true
+      register: gitea_user
+      changed_when: gitea_user.rc == 0
+      failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
+      no_log: true
 
     # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
     - name: Restart after a config change

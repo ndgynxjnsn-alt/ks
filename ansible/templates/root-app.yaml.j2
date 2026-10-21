@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+# The root of the app of apps: Argo CD renders argocd/root from Git with these site values (from the
+# inventory) into one Application per component.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lgtm
+  namespace: argocd
+  labels: { lgtm/set: gitops }
+spec:
+  project: default
+  destination: { server: https://kubernetes.default.svc, namespace: argocd }
+  source:
+    repoURL: {{ gitops.repo_url }}
+    targetRevision: {{ gitops.revision }}
+    path: argocd/root
+    helm:
+      valuesObject: {{ root_values | to_json }}
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    retry:
+      limit: 20
+      backoff: { duration: 15s, factor: 2, maxDuration: 5m }

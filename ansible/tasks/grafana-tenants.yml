@@ -98,7 +98,7 @@
         force_basic_auth: true
         body_format: json
         body:
-          dashboard: "{{ lookup('file', repo_dir + '/k8s/dashboards/' + item) | from_json | combine({'id': none}) }}"
+          dashboard: "{{ lookup('file', repo_dir + '/argocd/platform/dashboards/' + item) | from_json | combine({'id': none}) }}"
           folderUid: lgtm
           overwrite: true
       loop: "{{ tenant.dashboards }}"

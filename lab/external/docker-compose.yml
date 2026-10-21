@@ -5,6 +5,7 @@
 #   pebble    https://192.168.56.1:14000/dir     ACME server with External Account Binding (the "company CA")
 #   bind      192.168.56.1:5353 (udp+tcp)        authoritative DNS for lgtm.company.org: *.lgtm.company.org
 #                                                -> ingress VIP, RFC2136 updates with the TSIG key (DNS-01)
+#   gitea     http://192.168.56.1:3000           Git repository + Helm chart repository for Argo CD
 name: lgtm-external
 
 services:
@@ -45,3 +46,22 @@ services:
       - ./.generated/bind/named.conf:/etc/bind/named.conf:ro
       - ./.generated/bind/zones:/var/lib/bind  # writable: dynamic updates + journal
     restart: unless-stopped
+
+  gitea:
+    image: gitea/gitea:1.27.3-rootless
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"                       # no web installer
+      GITEA__server__ROOT_URL: http://192.168.56.1:3000/
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__repository__ENABLE_PUSH_CREATE_USER: "true"          # first push creates the repo
+      GITEA__repository__DEFAULT_PUSH_CREATE_PRIVATE: "false"     # Argo CD reads anonymously
+      GITEA__packages__ENABLED: "true"                            # Helm repository /api/packages/<user>/helm
+    ports: ["3000:3000"]
+    volumes:
+      - gitea-data:/var/lib/gitea
+      - gitea-config:/etc/gitea
+    restart: unless-stopped
+
+volumes:
+  gitea-data:
+  gitea-config:

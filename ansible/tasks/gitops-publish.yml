@@ -1,0 +1,42 @@
+# Publishes this repository and the charts for Argo CD (lab: Gitea from lab/external; at a company this is
+# usually done by CI). Only committed changes are deployed: Argo CD reads Git, not the working tree.
+- name: Uncommitted changes (not deployed)
+  ansible.builtin.command: git -C {{ repo_dir }} status --porcelain
+  register: git_dirty
+  changed_when: false
+
+- name: Warn about uncommitted changes
+  ansible.builtin.debug:
+    msg: "Uncommitted changes are NOT deployed - commit them and re-run: {{ git_dirty.stdout_lines | join(', ') }}"
+  when: git_dirty.stdout | length > 0
+
+- name: Push HEAD to the Git server
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ repo_dir }}"
+      - -c
+      - "http.extraHeader=Authorization: Basic {{ (gitops.publish.username ~ ':' ~ gitops.publish.password) | b64encode }}"
+      - push
+      - --force
+      - "{{ gitops.publish.git_push_url }}"
+      - "HEAD:refs/heads/{{ gitops.revision }}"
+  register: git_push
+  changed_when: "'up-to-date' not in git_push.stderr"
+  no_log: true
+
+- name: Upload charts to the Helm repository (an existing version is kept)
+  ansible.builtin.uri:
+    url: "{{ gitops.publish.helm_upload_url }}"
+    method: POST
+    src: "{{ item }}"
+    headers: { Content-Type: application/octet-stream }
+    user: "{{ gitops.publish.username }}"
+    password: "{{ gitops.publish.password }}"
+    force_basic_auth: true
+    status_code: [201, 409]
+  loop: "{{ query('fileglob', artifacts_dir + '/charts/*.tgz') }}"
+  loop_control: { label: "{{ item | basename }}" }
+  register: chart_upload
+  changed_when: chart_upload.status == 201

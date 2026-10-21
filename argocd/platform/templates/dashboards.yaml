@@ -1,0 +1,12 @@
+# Dashboards for Grafana's Main org (dashboards/*.json, provider "lgtm" in k8s/values/grafana.yaml).
+# Tenant orgs get theirs through the Grafana API (ansible/tasks/grafana-tenants.yml, same files).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: lgtm
+data:
+  {{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}

@@ -22,7 +22,8 @@ envValueFrom:
     secretKeyRef: { name: grafana-db-app, key: password }
   POD_IP:
     fieldRef: { fieldPath: status.podIP }
-adminUser: admin
+admin:
+  existingSecret: grafana-admin     # admin-user / admin-password, created by ansible/lgtm.yml
 
 persistence:
   enabled: false

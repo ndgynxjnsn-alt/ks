@@ -5,7 +5,19 @@
 vip: 10.0.10.10            # free IP in the servers' subnet: Kubernetes API (6443) + RKE2 join (9345)
 ingress_vip: 10.0.10.20    # free IP in the same subnet: all LGTM hostnames (Traefik)
 domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
+
+# ---------------------------------------------------------------- GitOps (Argo CD)
+# The cluster must reach both: this repository (e.g. a GitLab mirror) and a Helm repository holding
+# artifacts/charts (e.g. Harbor/Nexus; push them with CI or `helm push`).
+gitops:
+  repo_url: https://gitlab.company.org/observability/lgtm.git
+  revision: main
+  helm_repo_url: https://harbor.company.org/chartrepo/lgtm
+  repo_username: argocd                               # optional: read access for Argo CD
+  repo_password: "{{ vault_gitlab_token }}"
+  # helm_username / helm_password: optional
+  # publish: {...}                                    # optional: let lgtm.yml push (see lab inventory)
 
 # ---------------------------------------------------------------- tenants
 tenants:

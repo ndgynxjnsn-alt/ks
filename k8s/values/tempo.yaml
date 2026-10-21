@@ -15,7 +15,10 @@ tempo:
       backend: s3
       s3:
         bucket: tempo-traces
+        endpoint: garage.lgtm.svc:3900
         region: garage
+        access_key: ${S3_ACCESS_KEY_ID}         # from the Secret s3-credentials (config.expand-env)
+        secret_key: ${S3_SECRET_ACCESS_KEY}
         insecure: true
         forcepathstyle: true
       wal:
@@ -40,6 +43,8 @@ tempo:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1536Mi }
+  extraArgs: { config.expand-env: true }
+  extraEnvFrom: [{ secretRef: { name: s3-credentials } }]
   extraVolumeMounts:
     - { name: data, mountPath: /var/tempo }
 

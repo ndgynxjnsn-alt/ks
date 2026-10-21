@@ -16,6 +16,8 @@ monolithic:
     requests: { cpu: 100m, memory: 512Mi }
     limits: { memory: 1536Mi }
   terminationGracePeriodSeconds: 60
+  # S3 credentials from the Secret s3-credentials (the chart runs Mimir with -config.expand-env=true)
+  extraEnvFrom: [{ secretRef: { name: s3-credentials } }]
   extraArgs:
     # On a fresh install the gossip service has no endpoints yet; don't crash, keep retrying the join.
     memberlist.abort-if-fast-join-fails: "false"
@@ -71,8 +73,11 @@ mimir:
       storage:
         backend: s3
         s3:
+          endpoint: garage.lgtm.svc:3900
           region: garage
           insecure: true
+          access_key_id: ${S3_ACCESS_KEY_ID}
+          secret_access_key: ${S3_SECRET_ACCESS_KEY}
     blocks_storage:
       s3: { bucket_name: mimir-blocks }
     ruler_storage:

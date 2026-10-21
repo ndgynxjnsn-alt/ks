@@ -1,0 +1,5 @@
+apiVersion: v2
+name: lgtm-root
+description: App of apps - one Argo CD Application per component of the LGTM cluster
+type: application
+version: 1.0.0

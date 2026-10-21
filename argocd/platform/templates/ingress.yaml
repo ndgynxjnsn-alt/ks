@@ -1,0 +1,42 @@
+{{- /* Every hostname <name>.<domain> twice: plain http on Traefik's "web" entrypoint, and https on
+       "websecure" with the wildcard certificate (Traefik default TLSStore, templates/tls.yaml).
+       Only names listed in .Values.hosts are published. */ -}}
+{{- $routes := dict
+  "grafana"   (list (list "/" "grafana" 80 "lgtm"))
+  "loki"      (list (list "/" "loki" 3100 "lgtm"))
+  "tempo"     (list (list "/" "tempo" 3200 "lgtm"))
+  "mimir"     (list (list "/" "mimir-monolithic" 8080 "lgtm"))
+  "pyroscope" (list (list "/" "pyroscope" 4040 "lgtm"))
+  "alloy"     (list (list "/v1/" "alloy" 4318 "lgtm") (list "/ingest" "alloy" 9999 "lgtm") (list "/" "alloy" 12345 "lgtm"))
+  "garage"    (list (list "/" "garage" 3900 "lgtm"))
+  "argocd"    (list (list "/" "argocd-server" 80 "argocd"))
+}}
+{{- range $name := .Values.hosts }}
+{{- $paths := get $routes $name }}
+{{- if not $paths }}{{ fail (printf "unknown host %q in hosts (known: %s)" $name (keys $routes | sortAlpha | join ", ")) }}{{ end }}
+{{- range $scheme := list "http" "https" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}-{{ $scheme }}
+  namespace: {{ index (first $paths) 3 }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ ternary "web" "websecure" (eq $scheme "http") }}
+spec:
+  ingressClassName: traefik
+  {{- if eq $scheme "https" }}
+  tls:
+    - hosts: ["{{ $name }}.{{ $.Values.domain }}"]    # certificate: default TLSStore (wildcard)
+  {{- end }}
+  rules:
+    - host: {{ $name }}.{{ $.Values.domain }}
+      http:
+        paths:
+          {{- range $paths }}
+          - path: {{ index . 0 }}
+            pathType: Prefix
+            backend: { service: { name: {{ index . 1 }}, port: { number: {{ index . 2 }} } } }
+          {{- end }}
+{{- end }}
+{{- end }}

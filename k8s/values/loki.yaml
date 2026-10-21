@@ -1,5 +1,6 @@
 # Loki monolithic, multi-tenant: 3 replicas, replication factor 3, chunks + index in Garage S3.
-# S3 endpoint and credentials are added by ansible/lgtm.yml.
+# S3 credentials: environment variables from the Secret s3-credentials (created by ansible/lgtm.yml),
+# expanded in the config (-config.expand-env); the values in Git contain no secrets.
 deploymentMode: Monolithic
 fullnameOverride: loki
 
@@ -22,7 +23,10 @@ loki:
       chunks: loki-chunks
       ruler: loki-ruler
     s3:
+      endpoint: garage.lgtm.svc:3900
       region: garage
+      accessKeyId: ${S3_ACCESS_KEY_ID}
+      secretAccessKey: ${S3_SECRET_ACCESS_KEY}
       s3ForcePathStyle: true
       insecure: true
   limits_config:
@@ -43,6 +47,8 @@ loki:
 
 singleBinary:
   replicas: 3
+  extraArgs: [-config.expand-env=true]
+  extraEnvFrom: [{ secretRef: { name: s3-credentials } }]
   persistence:
     size: 2Gi
   resources:
