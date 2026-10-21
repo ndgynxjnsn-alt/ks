@@ -89,7 +89,8 @@
     src: "{{ item }}.j2"
     dest: "/var/lib/rancher/rke2/server/manifests/{{ item }}"
     mode: "0644"
-  loop: [kube-vip.yaml, rke2-canal-config.yaml]
+  loop: [kube-vip.yaml, rke2-canal-config.yaml, rke2-traefik-config.yaml]
+  tags: [addons]
 
 - name: Local-path storage manifest
   ansible.builtin.copy: { src: local-path-storage.yaml, dest: /var/lib/rancher/rke2/server/manifests/, mode: "0644" }

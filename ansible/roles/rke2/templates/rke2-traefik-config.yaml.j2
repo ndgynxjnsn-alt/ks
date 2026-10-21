@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# RKE2's bundled Traefik: publish the ingress VIP (Service kube-system/vip-ingress, kube-vip) into the status of
+# every Ingress it serves. Argo CD treats an Ingress without a load balancer address as "Progressing".
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesIngress:
+        publishedService:
+          enabled: true
+          pathOverride: kube-system/vip-ingress

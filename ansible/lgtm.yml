@@ -142,10 +142,26 @@
 
     # Earlier versions applied these with Ansible (label lgtm/set). Objects with the same names are adopted
     # by Argo CD; only the per-hostname VIP Services of the old design have no successor.
+    - name: List kube-system Services
+      ansible.builtin.command: "{{ kubectl }} -n kube-system get services -o json"
+      register: kube_system_services
+      changed_when: false
+
     - name: Remove the per-hostname VIP Services of earlier versions
-      ansible.builtin.command: "{{ kubectl }} -n kube-system delete service -l lgtm/set=vips --ignore-not-found"
-      register: old_vips
-      changed_when: "'deleted' in old_vips.stdout"
+      ansible.builtin.command: "{{ kubectl }} -n kube-system delete service {{ item }}"
+      loop: >-
+        {{ (kube_system_services.stdout | from_json)['items'] | map(attribute='metadata.name')
+           | select('match', '^vip-') | reject('equalto', 'vip-ingress') | list }}
+      changed_when: true
+
+    # The per-hostname design requested one certificate per Ingress (cert-manager ingress-shim); the
+    # wildcard certificate replaces them.
+    - name: Remove the per-hostname certificates of earlier versions
+      ansible.builtin.command: >-
+        {{ kubectl }} -n lgtm delete certificate --ignore-not-found
+        {{ lgtm_hosts | map('regex_replace', '$', '-tls') | join(' ') }}
+      register: old_certs
+      changed_when: "'deleted' in old_certs.stdout"
 
     - name: Install Argo CD
       ansible.builtin.command:
