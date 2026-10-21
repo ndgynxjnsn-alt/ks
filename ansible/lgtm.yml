@@ -50,7 +50,6 @@
       domain: "{{ domain }}"
       ingressVIP: "{{ ingress_vip }}"
       hosts: "{{ lgtm_hosts }}"
-      nodes: "{{ groups['nodes'] | map('extract', hostvars, 'ansible_host') | list }}"
       traefikSelector: "{{ traefik_selector }}"
       tls:
         issuer: "{{ tls_issuer.name }}"
