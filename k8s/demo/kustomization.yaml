@@ -1,0 +1,9 @@
+# Demo app (Argo CD app "demo"). The telemetry ConfigMap is generated with a content hash in its name, so the
+# Deployments roll whenever telemetry.env changes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: [demo.yaml]
+configMapGenerator:
+  - name: telemetry
+    namespace: demo
+    envs: [telemetry.env]

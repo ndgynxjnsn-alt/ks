@@ -20,8 +20,7 @@ topologySpreadConstraints:
 envValueFrom:
   GF_DATABASE_PASSWORD:
     secretKeyRef: { name: grafana-db-app, key: password }
-  POD_IP:
-    fieldRef: { fieldPath: status.podIP }
+# (POD_IP for ha_listen_address below is set by the chart itself)
 admin:
   existingSecret: grafana-admin     # admin-user / admin-password, created by ansible/lgtm.yml
 

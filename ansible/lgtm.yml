@@ -186,7 +186,7 @@
         set_kinds: [applications.argoproj.io]
         manifest: "{{ lookup('template', 'templates/root-app.yaml.j2') }}"
 
-    - name: Wait until Argo CD reports every Application healthy
+    - name: Wait until Argo CD reports every Application synced and healthy
       ansible.builtin.command: "{{ kubectl }} -n argocd get applications.argoproj.io -o json"
       register: argo_apps
       changed_when: false
@@ -194,7 +194,8 @@
         app_items: "{{ (argo_apps.stdout | from_json)['items'] }}"
         healthy: >-
           {{ app_items | selectattr('status.health.status', 'defined')
-             | selectattr('status.health.status', 'equalto', 'Healthy') | list }}
+             | selectattr('status.health.status', 'equalto', 'Healthy')
+             | selectattr('status.sync.status', 'equalto', 'Synced') | list }}
       until: >-
         argo_apps.rc == 0 and app_items | length == root_values.apps | length + 1
         and healthy | length == app_items | length

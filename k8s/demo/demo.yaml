@@ -7,29 +7,6 @@ kind: Namespace
 metadata:
   name: demo
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: telemetry
-  namespace: demo
-data:
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy.lgtm.svc:4318
-  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-  OTEL_EXPORTER_OTLP_HEADERS: X-Scope-OrgID=demo            # tenant "demo" for traces, metrics, logs
-  OTEL_METRIC_EXPORT_INTERVAL: "15000"
-  OTEL_INSTRUMENTATION_MICROMETER_ENABLED: "true"   # bridge Micrometer meters into OTel metrics
-  OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_LOG_ATTRIBUTES: "true"
-  PYROSCOPE_SERVER_ADDRESS: http://alloy.lgtm.svc:9999
-  PYROSCOPE_FORMAT: jfr
-  PYROSCOPE_PROFILER_EVENT: itimer
-  PYROSCOPE_PROFILER_ALLOC: 512k
-  PYROSCOPE_PROFILER_LOCK: 10ms
-  PYROSCOPE_UPLOAD_INTERVAL: 15s
-  PYROSCOPE_LABELS: deployment_environment_name=lab,tenant=demo   # Alloy routes profiles by the tenant label
-  OTEL_PYROSCOPE_START_PROFILING: "false"   # the Pyroscope agent profiles; the extension only adds span labels
-  OTEL_PYROSCOPE_ADD_PROFILE_URL: "false"
-  OTEL_PYROSCOPE_ADD_PROFILE_BASELINE_URL: "false"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
