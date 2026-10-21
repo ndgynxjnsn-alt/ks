@@ -68,7 +68,8 @@ tls_issuer:
     nameserver: "{{ external_host_ip }}:5353"     # authoritative for <domain>, accepts RFC2136 updates
     tsig_key_name: lgtm-acme
     tsig_algorithm: HMACSHA256
-    tsig_secret: "{{ lookup('password', secrets_dir + '/dns_tsig_secret chars=ascii_letters,digits length=44') | b64encode }}"
+    tsig_secret: >-
+      {{ lookup('password', secrets_dir + '/dns_tsig_secret chars=ascii_letters,digits length=44') | b64encode }}
     # cert-manager checks that the TXT record is visible before telling the CA; the lab zone isn't in
     # public DNS, so it asks the zone's server directly. Omit for a zone that public resolvers can see.
     recursive_nameservers: "{{ external_host_ip }}:5353"
@@ -83,11 +84,12 @@ oauth:
   host_ip: "{{ external_host_ip }}"            # optional: adds a hostAliases entry for hostname to Grafana's pods
   issuer: http://keycloak.company.org:8080/realms/lgtm
   client_id: grafana
-oauth_client_secret: "{{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}"
-keycloak_admin_password: "{{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}"
+oauth_client_secret: >-
+  {{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}
+keycloak_admin_password: >-
+  {{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}
 # lab users of the realm (password files in .secrets/keycloak_user_<name>)
 keycloak_users:
   - { name: admin-user, email: admin@example.corp, groups: [grafana-admins] }
   - { name: alice, email: alice@example.corp, groups: [tenant-demo] }
   - { name: bob, email: bob@example.corp, groups: [tenant-platform] }
-

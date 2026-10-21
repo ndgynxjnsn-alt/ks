@@ -4,11 +4,16 @@
 - name: Group for uploading files
   ansible.builtin.group: { name: "{{ otel_import_group }}", system: true }
 
-- name: "Add {{ ansible_user }} to {{ otel_import_group }}"
+- name: Add the Ansible user to the upload group
   ansible.builtin.user: { name: "{{ ansible_user }}", groups: ["{{ otel_import_group }}"], append: true }
 
 - name: Import directory
-  ansible.builtin.file: { path: "{{ otel_import_dir }}", state: directory, owner: root, group: "{{ otel_import_group }}", mode: "0755" }
+  ansible.builtin.file:
+    path: "{{ otel_import_dir }}"
+    state: directory
+    owner: root
+    group: "{{ otel_import_group }}"
+    mode: "0755"
 
 - name: One directory per tenant (setgid, group-writable)
   ansible.builtin.file:
@@ -29,7 +34,8 @@
       Description=Delete processed OTLP/JSON import files
       [Service]
       Type=oneshot
-      ExecStart=/usr/bin/find {{ otel_import_dir }} -mindepth 2 -maxdepth 2 -type f ( -name *.imported -o -name *.failed ) -mmin +{{ otel_import_keep_minutes }} -delete
+      ExecStart=/usr/bin/find {{ otel_import_dir }} -mindepth 2 -maxdepth 2 -type f \
+        ( -name *.imported -o -name *.failed ) -mmin +{{ otel_import_keep_minutes }} -delete
 
 - name: Cleanup timer (every 15 minutes)
   ansible.builtin.copy:
@@ -45,4 +51,8 @@
       WantedBy=timers.target
 
 - name: Enable cleanup timer
-  ansible.builtin.systemd_service: { name: otel-import-cleanup.timer, enabled: true, state: started, daemon_reload: true }
+  ansible.builtin.systemd_service:
+    name: otel-import-cleanup.timer
+    enabled: true
+    state: started
+    daemon_reload: true

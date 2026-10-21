@@ -8,13 +8,15 @@
   register: applied
   changed_when: "'configured' in applied.stdout or 'created' in applied.stdout"
 
-- name: "List objects of {{ set_name }} in the cluster"
+- name: "List the cluster objects of set {{ set_name }}"
   ansible.builtin.command: "{{ kubectl }} get {{ set_kinds | join(',') }} -A -l lgtm/set={{ set_name }} -o json"
   register: existing
   changed_when: false
 
-- name: "Delete objects no longer part of {{ set_name }}"
-  ansible.builtin.command: "{{ kubectl }} -n {{ item.metadata.namespace }} delete {{ item.kind }} {{ item.metadata.name }}"
+- name: "Delete objects that are no longer part of set {{ set_name }}"
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ item.metadata.namespace }} delete {{ item.kind }} {{ item.metadata.name }}
+  changed_when: true
   loop: "{{ (existing.stdout | from_json)['items'] }}"
   loop_control: { label: "{{ item.kind }}/{{ item.metadata.namespace }}/{{ item.metadata.name }}" }
   when: (item.kind ~ '/' ~ item.metadata.name) not in wanted

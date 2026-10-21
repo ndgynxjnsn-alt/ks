@@ -14,11 +14,10 @@
           {{ rke2_iface }}:
             routes: [{ to: default, via: {{ default_gateway }} }]
   when: default_gateway is defined
-  register: default_route
+  notify: Apply netplan
 
-- name: Apply netplan
-  ansible.builtin.command: netplan apply
-  when: default_route.changed
+- name: Apply a changed default route now
+  ansible.builtin.meta: flush_handlers
 
 - name: Create directories
   ansible.builtin.file: { path: "{{ item }}", state: directory, mode: "0755" }
@@ -41,29 +40,36 @@
 - name: Images already in containerd
   ansible.builtin.command: >-
     /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock images -o json
-  register: crictl_images
+  register: rke2_crictl_images
   changed_when: false
   failed_when: false   # fresh node: RKE2 (and containerd) not installed or not running yet
   tags: [images]
 
 - name: Copy missing image archives
-  ansible.builtin.copy: { src: "{{ artifacts_dir }}/images/{{ item.file }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
-  loop: "{{ lookup('file', artifacts_dir + '/images/index.yml') | from_yaml | rejectattr('ref', 'in', present_images) }}"
+  ansible.builtin.copy:
+    src: "{{ artifacts_dir }}/images/{{ item.file }}"
+    dest: "{{ rke2_images_dir }}/"
+    mode: "0644"
+  loop: "{{ rke2_image_index | rejectattr('ref', 'in', present_images) }}"
   loop_control: { label: "{{ item.ref }}" }
   vars:
+    rke2_image_index: "{{ lookup('file', artifacts_dir + '/images/index.yml') | from_yaml }}"
     present_images: >-
-      {{ ((crictl_images.stdout | from_json).images | map(attribute='repoTags') | flatten)
-         if crictl_images.rc == 0 else [] }}
-  register: preloaded
+      {{ ((rke2_crictl_images.stdout | from_json).images | map(attribute='repoTags') | flatten)
+         if rke2_crictl_images.rc == 0 else [] }}
+  register: rke2_preloaded
   tags: [images]
 
 - name: Import copied images into the running containerd
   ansible.builtin.shell: >-
+    set -o pipefail;
     zstd -dc {{ rke2_images_dir }}/{{ item.item.file }} |
     /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import -
-  loop: "{{ preloaded.results | selectattr('changed') | list }}"
+  args: { executable: /bin/bash }
+  changed_when: true
+  loop: "{{ rke2_preloaded.results | selectattr('changed') | list }}"
   loop_control: { label: "{{ item.item.ref }}" }
-  when: crictl_images.rc == 0
+  when: rke2_crictl_images.rc == 0
   tags: [images]
 
 - name: Install RKE2 from the tarball
@@ -79,7 +85,10 @@
   notify: Restart RKE2   # site.yml runs the servers one after another, so restarts are rolling
 
 - name: Add-on manifests applied by RKE2 itself
-  ansible.builtin.template: { src: "{{ item }}.j2", dest: "/var/lib/rancher/rke2/server/manifests/{{ item }}", mode: "0644" }
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/var/lib/rancher/rke2/server/manifests/{{ item }}"
+    mode: "0644"
   loop: [kube-vip.yaml, rke2-canal-config.yaml]
 
 - name: Local-path storage manifest
@@ -90,8 +99,8 @@
 
 - name: Wait until the cluster answers on the VIP (kube-vip)
   ansible.builtin.uri: { url: "https://{{ vip }}:9345/ping", validate_certs: false, return_content: true }
-  register: ping
-  until: ping.status == 200
+  register: rke2_ping
+  until: rke2_ping.status == 200
   retries: 60
   delay: 5
 

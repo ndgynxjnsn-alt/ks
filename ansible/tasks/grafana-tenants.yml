@@ -25,7 +25,7 @@
         status_code: [200, 404]
       register: org_lookup
 
-    - name: "Create org {{ tenant.name }} (the admin user becomes its Admin)"
+    - name: "Create the org (the admin user becomes its Admin): {{ tenant.name }}"
       ansible.builtin.uri:
         url: "{{ grafana_api }}/orgs"
         method: POST
@@ -98,7 +98,8 @@
         force_basic_auth: true
         body_format: json
         body:
-          dashboard: "{{ lookup('file', repo_dir + '/argocd/platform/dashboards/' + item) | from_json | combine({'id': none}) }}"
+          dashboard: >-
+            {{ lookup('file', repo_dir + '/argocd/platform/dashboards/' + item) | from_json | combine({'id': none}) }}
           folderUid: lgtm
           overwrite: true
       loop: "{{ tenant.dashboards }}"

@@ -52,7 +52,9 @@ spec:
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
             - { name: OTEL_SERVICE_NAME, value: shop }
             - { name: PYROSCOPE_APPLICATION_NAME, value: shop }
-            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=demo,deployment.environment.name=lab,k8s.namespace.name=demo,k8s.pod.name=$(POD_NAME)" }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=demo,deployment.environment.name=lab,\
+                k8s.namespace.name=demo,k8s.pod.name=$(POD_NAME)"
             - { name: DEMO_INVENTORY_URL, value: http://inventory.demo.svc:8080 }
             - { name: DEMO_LOAD_ENABLED, value: "true" }
             - { name: DEMO_LOAD_TARGET_URL, value: http://shop.demo.svc:8080 }
@@ -84,7 +86,9 @@ spec:
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
             - { name: OTEL_SERVICE_NAME, value: inventory }
             - { name: PYROSCOPE_APPLICATION_NAME, value: inventory }
-            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=demo,deployment.environment.name=lab,k8s.namespace.name=demo,k8s.pod.name=$(POD_NAME)" }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=demo,deployment.environment.name=lab,\
+                k8s.namespace.name=demo,k8s.pod.name=$(POD_NAME)"
           ports: [{ name: http, containerPort: 8080 }]
           readinessProbe: { httpGet: { path: /actuator/health, port: http }, initialDelaySeconds: 10 }
           resources:

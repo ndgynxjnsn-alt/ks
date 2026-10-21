@@ -2,3 +2,7 @@
 - name: Restart RKE2
   ansible.builtin.systemd_service: { name: rke2-server, state: restarted }
   when: not (rke2_install.changed | default(false))
+
+- name: Apply netplan
+  ansible.builtin.command: netplan apply
+  changed_when: true

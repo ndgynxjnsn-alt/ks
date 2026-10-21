@@ -1,0 +1,9 @@
+# ansible-lint configuration (run: uvx --from ansible-lint ansible-lint)
+profile: production
+exclude_paths:
+  - artifacts/
+  - .bin/
+  - lab/external/.generated/
+  - argocd/          # Helm charts (Go templates), not Ansible
+  - k8s/             # Helm values / Kubernetes manifests
+  - apps/

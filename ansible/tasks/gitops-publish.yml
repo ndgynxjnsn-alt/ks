@@ -1,6 +1,7 @@
 # Publishes this repository and the charts for Argo CD (lab: Gitea from lab/external; at a company this is
 # usually done by CI). Only committed changes are deployed: Argo CD reads Git, not the working tree.
-- name: Uncommitted changes (not deployed)
+# the git module can't report the working tree status
+- name: Uncommitted changes (not deployed)  # noqa: command-instead-of-module
   ansible.builtin.command: git -C {{ repo_dir }} status --porcelain
   register: git_dirty
   changed_when: false
@@ -17,12 +18,14 @@
       - -C
       - "{{ repo_dir }}"
       - -c
-      - "http.extraHeader=Authorization: Basic {{ (gitops.publish.username ~ ':' ~ gitops.publish.password) | b64encode }}"
+      - "http.extraHeader=Authorization: Basic {{ git_auth | b64encode }}"
       - push
       - --force
       - "{{ gitops.publish.git_push_url }}"
       - "HEAD:refs/heads/{{ gitops.revision }}"
   register: git_push
+  vars:
+    git_auth: "{{ gitops.publish.username }}:{{ gitops.publish.password }}"
   changed_when: "'up-to-date' not in git_push.stderr"
   no_log: true
 

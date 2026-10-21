@@ -177,8 +177,12 @@
       changed_when: false
       vars:
         app_items: "{{ (argo_apps.stdout | from_json)['items'] }}"
-        healthy: "{{ app_items | selectattr('status.health.status', 'defined') | selectattr('status.health.status', 'equalto', 'Healthy') | list }}"
-      until: argo_apps.rc == 0 and app_items | length == root_values.apps | length + 1 and healthy | length == app_items | length
+        healthy: >-
+          {{ app_items | selectattr('status.health.status', 'defined')
+             | selectattr('status.health.status', 'equalto', 'Healthy') | list }}
+      until: >-
+        argo_apps.rc == 0 and app_items | length == root_values.apps | length + 1
+        and healthy | length == app_items | length
       retries: 90
       delay: 20
 

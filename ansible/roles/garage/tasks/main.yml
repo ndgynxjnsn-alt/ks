@@ -37,8 +37,10 @@
 
 - name: Unmount all Garage data directories
   ansible.builtin.shell: |
-    for m in $(findmnt -rn -o TARGET | grep '^/srv/garage/data'); do umount "$m"; done
+    set -o pipefail
+    for m in $(findmnt -rn -o TARGET | grep '^/srv/garage/data' || true); do umount "$m"; done
     sed -i '/^LABEL=garage[0-9]* /d' /etc/fstab
+  args: { executable: /bin/bash }
   changed_when: true
 
 - name: Wipe Garage metadata (node identity, layout, buckets)

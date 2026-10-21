@@ -21,7 +21,7 @@
 
     - name: BIND configuration (zone + TSIG key)
       ansible.builtin.template: { src: templates/named.conf.j2, dest: "{{ gen }}/bind/named.conf", mode: "0644" }
-      register: bind_config
+      notify: Restart bind
 
     - name: Zone seed (only once; BIND owns the zone afterwards)
       ansible.builtin.template:
@@ -54,7 +54,7 @@
         src: templates/pebble-config.json.j2
         dest: "{{ gen }}/pebble/pebble-config.json"
         mode: "0644"
-      register: pebble_config
+      notify: Restart pebble
 
     - name: Keycloak realm (client, groups, users)
       ansible.builtin.template:
@@ -97,23 +97,31 @@
       failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
       no_log: true
 
-    # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
-    - name: Restart after a config change
-      ansible.builtin.command:
-        cmd: "docker compose restart {{ item.name }}"
-        chdir: "{{ repo_dir }}/lab/external"
-      become: true
-      loop:
-        - { name: pebble, changed: "{{ pebble_config.changed }}" }
-        - { name: bind, changed: "{{ bind_config.changed }}" }
-      when: item.changed | bool
-
     - name: Next steps
+      vars:
+        lgtm_fqdns: "{{ lgtm_hosts | map('regex_replace', '$', '.' ~ domain) | list }}"
       ansible.builtin.debug:
         msg:
           - "/etc/hosts on this machine:  {{ external_host_ip }} {{ oauth.hostname }}"
-          - "                             {{ ingress_vip }} {{ lgtm_hosts | map('regex_replace', '$', '.' ~ domain) | join(' ') }}"
+          - "                             {{ ingress_vip }} {{ lgtm_fqdns | join(' ') }}"
           - "(or use the lab DNS: dig @{{ external_host_ip }} -p 5353 grafana.{{ domain }})"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
-          - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }} (passwords in .secrets/keycloak_user_<name>)"
+          - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }}"
+          - "  passwords: .secrets/keycloak_user_<name>"
           - "Then: ansible-playbook -i lab/inventory ansible/lgtm.yml"
+
+  # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
+  handlers:
+    - name: Restart pebble
+      ansible.builtin.command:
+        cmd: docker compose restart pebble
+        chdir: "{{ repo_dir }}/lab/external"
+      become: true
+      changed_when: true
+
+    - name: Restart bind
+      ansible.builtin.command:
+        cmd: docker compose restart bind
+        chdir: "{{ repo_dir }}/lab/external"
+      become: true
+      changed_when: true

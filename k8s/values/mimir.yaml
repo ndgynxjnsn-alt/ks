@@ -92,4 +92,5 @@ mimir:
       max_label_names_per_series: 50
       # resource attributes -> metric labels (service_name, deployment_environment_name, ...), the same
       # names Loki and Pyroscope use, so dashboards and links can filter all signals the same way
-      promote_otel_resource_attributes: "service.name,service.namespace,service.instance.id,deployment.environment.name,k8s.pod.name,k8s.namespace.name"
+      promote_otel_resource_attributes: "service.name,service.namespace,service.instance.id,\
+        deployment.environment.name,k8s.pod.name,k8s.namespace.name"

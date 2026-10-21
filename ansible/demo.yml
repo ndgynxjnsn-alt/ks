@@ -9,20 +9,27 @@
     - name: Compile
       ansible.builtin.command: ./mvnw -q clean package -DskipTests
       args: { chdir: "{{ app_dir }}" }
+      changed_when: false   # build output only; whether the image changed is decided by its ID below
 
     - name: Create agents directory
       ansible.builtin.file: { path: "{{ app_dir }}/target/agents", state: directory, mode: "0755" }
 
     - name: Download the OTel Java agent, the Pyroscope Java agent and the Pyroscope OTel extension
-      ansible.builtin.get_url: { url: "{{ item }}", dest: "{{ app_dir }}/target/agents/", mode: "0644" }
+      ansible.builtin.get_url:
+        url: "https://github.com/{{ item.repo }}/releases/download/v{{ item.version }}/{{ item.file }}"
+        dest: "{{ app_dir }}/target/agents/"
+        mode: "0644"
       loop:
-        - https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v{{ otel_agent_version }}/opentelemetry-javaagent.jar
-        - https://github.com/grafana/pyroscope-java/releases/download/v{{ pyroscope_agent_version }}/pyroscope.jar
-        - https://github.com/grafana/otel-profiling-java/releases/download/v{{ pyroscope_otel_version }}/pyroscope-otel.jar
+        - { repo: open-telemetry/opentelemetry-java-instrumentation, version: "{{ otel_agent_version }}",
+            file: opentelemetry-javaagent.jar }
+        - { repo: grafana/pyroscope-java, version: "{{ pyroscope_agent_version }}", file: pyroscope.jar }
+        - { repo: grafana/otel-profiling-java, version: "{{ pyroscope_otel_version }}", file: pyroscope-otel.jar }
+      loop_control: { label: "{{ item.file }}" }
 
     - name: Build image tarball
       ansible.builtin.command: ./mvnw -q jib:buildTar -Dimage={{ demo_image }}
       args: { chdir: "{{ app_dir }}" }
+      changed_when: false
 
     # Image ID = sha256 of the image config; Jib builds are reproducible, so unchanged code -> same ID.
     - name: Image ID of the new build
@@ -61,6 +68,7 @@
           ansible.builtin.command: >-
             /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io
             images import /var/lib/rancher/rke2/agent/images/demo.tar
+          changed_when: true
 
 # The manifests (k8s/demo) are deployed by Argo CD (app "demo"). Same tag with new content: delete the
 # pods (not "rollout restart", which would change the Deployment spec that Argo CD keeps in sync).
@@ -77,3 +85,4 @@
     - name: Delete the demo pods (the Deployments recreate them)
       ansible.builtin.command: "{{ kubectl }} -n demo delete pods --all --wait=false"
       when: image_changed | bool
+      changed_when: true

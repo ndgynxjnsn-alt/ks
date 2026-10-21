@@ -258,7 +258,8 @@ alloy:
         forward_to = [prometheus.relabel.node.receiver]
         rule {
           source_labels = ["__name__"]
-          regex         = "up|kubelet_running_pods|kubelet_running_containers|kubelet_volume_stats_(used|capacity)_bytes"
+          regex         = "up|kubelet_running_pods|kubelet_running_containers|" +
+                          "kubelet_volume_stats_(used|capacity)_bytes"
           action        = "keep"
         }
       }
@@ -278,7 +279,8 @@ alloy:
         forward_to = [prometheus.relabel.node.receiver]
         rule {
           source_labels = ["__name__"]
-          regex         = "up|container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_(receive|transmit)_bytes_total"
+          regex         = "up|container_cpu_usage_seconds_total|container_memory_working_set_bytes|" +
+                          "container_network_(receive|transmit)_bytes_total"
           action        = "keep"
         }
         rule {
@@ -312,7 +314,8 @@ alloy:
         }
         rule {
           source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_port_number"]
-          regex         = "lgtm;(3100|8080|3200|4040|3000|12345|9187)|cert-manager;9402|cnpg-system;8080|argocd;(8082|8083|8084)|kube-system;(8080|9100|9153)"
+          regex         = "lgtm;(3100|8080|3200|4040|3000|12345|9187)|cert-manager;9402|cnpg-system;8080|" +
+                          "argocd;(8082|8083|8084)|kube-system;(8080|9100|9153)"
           action        = "keep"
         }
         rule {
@@ -324,7 +327,11 @@ alloy:
           target_label  = "pod"
         }
         rule {
-          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_container_name"]
+          source_labels = [
+            "__meta_kubernetes_namespace",
+            "__meta_kubernetes_pod_label_app_kubernetes_io_name",
+            "__meta_kubernetes_pod_container_name",
+          ]
           regex         = "([^;]+);(?:([^;]+);.*|;(.+))"
           replacement   = "$1/$2$3"
           target_label  = "job"
@@ -384,6 +391,9 @@ controller:
       command: ["/bin/sh", "-c"]
       args:
         - |
+          first_line_is_object() {
+            head -c 1 "$1" | grep -q '{' && [ "$(head -n 1 "$1" | tail -c 2)" = "}" ]
+          }
           post() {  # $1 file with one OTLP/JSON request, $2 tenant
             if grep -q '"resourceSpans"' "$1"; then p=v1/traces
             elif grep -q '"resourceMetrics"' "$1"; then p=v1/metrics
@@ -395,7 +405,8 @@ controller:
           while true; do
             find /otel-import -mindepth 2 -maxdepth 2 -type f -name '*.json' -mmin +0 | while read -r f; do
               tenant=$(basename "$(dirname "$f")"); ok=1
-              if [ "$(grep -c . "$f")" -gt 1 ] && head -c 1 "$f" | grep -q '{' && [ "$(head -n 1 "$f" | tail -c 2)" = "}" ]; then
+              # JSON Lines = several lines and the first line is a complete object "{...}"
+              if [ "$(grep -c . "$f")" -gt 1 ] && first_line_is_object "$f"; then
                 # JSON Lines: one request per line
                 while IFS= read -r line; do
                   [ -z "$line" ] && continue
@@ -410,4 +421,3 @@ controller:
             done
             sleep 15
           done
-
