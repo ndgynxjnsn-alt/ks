@@ -70,21 +70,24 @@ others over a network.
 
 ## How Garage runs in this repository
 
-Garage runs on each VM as a **systemd service, outside Kubernetes** (`provision/node.sh`). Storage is the lowest
-layer. Running it beside Kubernetes means the cluster can be rebuilt without touching the data, and it needs
-no PersistentVolume YAML for the 15 disks.
+Garage runs on each server as a **systemd service, outside Kubernetes** (Ansible role `ansible/roles/garage`).
+Storage is the lowest layer. Running it beside Kubernetes means the cluster can be rebuilt without touching the
+data, and it needs no PersistentVolume YAML for the data disks.
 
 ```
-lgtm1/2/3: /dev/vd[b-f] (5 × 100 MB) -> ext4 -> /srv/garage/data1..5 -> garage (data_dir list)
-           /var/lib/garage/meta (root disk) -> LMDB metadata
-ports:     3900 S3 API · 3901 RPC between nodes · 3903 admin API + /metrics
+each server: unpartitioned data disks (lab: 5 × 100 MB) -> ext4 -> /srv/garage/data1..N -> garage (data_dir list)
+             /var/lib/garage/meta (root disk) -> LMDB metadata
+ports:       3900 S3 API · 3901 RPC between nodes · 3903 admin API + /metrics (scraped by Alloy)
 ```
 
-* `provision/garage-cluster.sh` (runs on the last node) connects the nodes, assigns the layout
-  (zone `dc1`, 400 MB per node), imports the access key from `.secrets/cluster.env` and creates the buckets:
+* Data disks are detected (every whole disk without partitions; disks reporting 0 bytes are skipped).
+  **Every `site.yml` run wipes and rebuilds Garage** (lab behaviour, see the role).
+* The role then connects the nodes, assigns the layout (zone `dc1`), imports the access key (`.secrets/`)
+  and creates the buckets:
   `loki-chunks loki-ruler tempo-traces mimir-blocks mimir-ruler mimir-alertmanager pyroscope-data`.
-* Clients use **`http://192.168.56.10:3900`**, the kube-vip VIP. Every node serves the full S3 API and forwards
-  internally, so the VIP always reaches a live Garage node.
+* Inside the cluster, clients use **`garage.lgtm.svc:3900`**. This Service has no selector, and its endpoints
+  are the servers (`argocd/platform/templates/vip.yaml`). Every node serves the full S3 API and forwards
+  internally. From outside: `https://garage.<domain>` through Traefik.
 
 Useful commands (on any node):
 
@@ -103,7 +106,7 @@ sudo garage -c /etc/garage.toml stats -a        # disk usage per node / data dir
   (`metadata_auto_snapshot_interval`).
 * **TLS:** Garage speaks plain HTTP. Put it behind a TLS reverse proxy, or keep it on a dedicated storage network
   as done here.
-* **Endpoint:** with a real DNS name (e.g. `s3.example.org`) pointing at the VIP or at all three nodes.
+* **Endpoint:** `garage.<domain>` through the ingress VIP, or a DNS name with all three server addresses.
 * **Backups:** replication is not a backup. Mirror critical buckets to another site (`rclone sync`).
 * **Growth:** add nodes with `garage layout assign` and `garage layout apply`, and Garage rebalances.
   Consider SeaweedFS (erasure coding) once raw capacity cost matters more than simplicity.
