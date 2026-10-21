@@ -202,6 +202,9 @@
       retries: 90
       delay: 20
 
+    - name: Grafana Main org (cross-tenant, for admins)
+      ansible.builtin.include_tasks: tasks/grafana-main-org.yml
+
     - name: Grafana organizations per tenant (datasources scoped to the tenant, dashboards)
       ansible.builtin.include_tasks: tasks/grafana-tenants.yml
       loop: "{{ tenants }}"

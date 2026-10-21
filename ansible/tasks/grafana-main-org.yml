@@ -1,0 +1,39 @@
+# With auto_assign_org=false (tenant users must not land in the cross-tenant org), a fresh Grafana database
+# names org 1 after the admin user ("admin@localhost") and creates an empty extra "Main Org.". Org 1 holds
+# the provisioned cross-tenant datasources and dashboards: name it "Main" and remove the empty extra org.
+- name: Grafana organizations
+  ansible.builtin.uri:
+    url: "http://{{ ingress_vip }}/api/orgs"
+    headers: { Host: "grafana.{{ domain }}" }
+    user: admin
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+  register: grafana_orgs
+  until: grafana_orgs.status == 200
+  retries: 30
+  delay: 10
+
+- name: Name org 1 "Main"
+  ansible.builtin.uri:
+    url: "http://{{ ingress_vip }}/api/orgs/1"
+    method: PUT
+    headers: { Host: "grafana.{{ domain }}" }
+    user: admin
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: { name: Main }
+  when: (grafana_orgs.json | selectattr('id', 'equalto', 1) | first).name != 'Main'
+  changed_when: true
+
+- name: Remove the empty extra "Main Org."
+  ansible.builtin.uri:
+    url: "http://{{ ingress_vip }}/api/orgs/{{ item.id }}"
+    method: DELETE
+    headers: { Host: "grafana.{{ domain }}" }
+    user: admin
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+  loop: "{{ grafana_orgs.json | selectattr('name', 'equalto', 'Main Org.') | rejectattr('id', 'equalto', 1) | list }}"
+  loop_control: { label: "{{ item.id }}" }
+  changed_when: true
