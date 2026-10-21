@@ -3,7 +3,7 @@
 #
 #   keycloak  http://keycloak.company.org:8080   OAuth/OIDC for Grafana (realm "lgtm", client "grafana")
 #   pebble    https://192.168.56.1:14000/dir     ACME server with External Account Binding (the "company CA")
-#   bind      192.168.56.1:5353 (udp+tcp)        authoritative DNS for lgtm.company.org: *.lgtm.company.org
+#   bind      192.168.56.1:10053 (udp+tcp)        authoritative DNS for lgtm.company.org: *.lgtm.company.org
 #                                                -> ingress VIP, RFC2136 updates with the TSIG key (DNS-01)
 #   gitea     http://192.168.56.1:3000           Git repository + Helm chart repository for Argo CD
 name: lgtm-external
@@ -40,8 +40,8 @@ services:
     image: internetsystemsconsortium/bind9:9.20
     command: ["-g", "-c", "/etc/bind/named.conf"]   # foreground, log to stderr
     ports:
-      - "5353:53/udp"                          # 53 on the lab bridge is taken by libvirt's dnsmasq
-      - "5353:53/tcp"
+      - "10053:53/udp"                          # 53: libvirt dnsmasq on the lab bridge, 5353: mDNS (avahi)
+      - "10053:53/tcp"
     volumes:
       - ./.generated/bind/named.conf:/etc/bind/named.conf:ro
       - ./.generated/bind/zones:/var/lib/bind  # writable: dynamic updates + journal

@@ -3,7 +3,7 @@
 #   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
 #   Gitea    - Git + Helm repository for Argo CD
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
-#   ansible-playbook -i lab/inventory lab/external.yml -K
+#   ansible-playbook -i lab/inventory lab/external.yml   (add -e lab_docker_sudo=true -K without docker group)
 - name: External services (Keycloak, Pebble)
   hosts: localhost
   connection: local
@@ -74,7 +74,7 @@
       ansible.builtin.command:
         cmd: docker compose up -d
         chdir: "{{ repo_dir }}/lab/external"
-      become: true
+      become: "{{ lab_docker_sudo | default(false) }}"
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
 
@@ -91,7 +91,7 @@
                "{{ gitops.publish.username }}", --password, "{{ gitops.publish.password }}",
                --email, "{{ gitops.publish.username }}@example.corp", --must-change-password=false]
         chdir: "{{ repo_dir }}/lab/external"
-      become: true
+      become: "{{ lab_docker_sudo | default(false) }}"
       register: gitea_user
       changed_when: gitea_user.rc == 0
       failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
@@ -104,7 +104,7 @@
         msg:
           - "/etc/hosts on this machine:  {{ external_host_ip }} {{ oauth.hostname }}"
           - "                             {{ ingress_vip }} {{ lgtm_fqdns | join(' ') }}"
-          - "(or use the lab DNS: dig @{{ external_host_ip }} -p 5353 grafana.{{ domain }})"
+          - "(or use the lab DNS: dig @{{ external_host_ip }} -p 10053 grafana.{{ domain }})"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }}"
           - "  passwords: .secrets/keycloak_user_<name>"
@@ -116,12 +116,12 @@
       ansible.builtin.command:
         cmd: docker compose restart pebble
         chdir: "{{ repo_dir }}/lab/external"
-      become: true
+      become: "{{ lab_docker_sudo | default(false) }}"
       changed_when: true
 
     - name: Restart bind
       ansible.builtin.command:
         cmd: docker compose restart bind
         chdir: "{{ repo_dir }}/lab/external"
-      become: true
+      become: "{{ lab_docker_sudo | default(false) }}"
       changed_when: true

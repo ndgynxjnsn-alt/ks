@@ -94,7 +94,7 @@ ansible-playbook -i lab/inventory ansible/demo.yml           # demo image -> ser
 source scripts/env.sh && k9s                                 # kubectl/helm/k9s with ./kubeconfig
 ```
 
-Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 5353 grafana.lgtm.company.org`):
+Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 10053 grafana.lgtm.company.org`):
 
 ```
 192.168.56.1  keycloak.company.org
@@ -188,7 +188,7 @@ Wildcards require the **DNS-01** challenge. cert-manager writes `_acme-challenge
 zone with **RFC2136** dynamic updates, authenticated by a TSIG key.
 
 **Lab:**
-* **BIND** (`lab/external`, port 5353) is authoritative for `lgtm.company.org`. The TSIG key may update only the
+* **BIND** (`lab/external`, port 10053) is authoritative for `lgtm.company.org`. The TSIG key may update only the
   challenge record.
 * **Pebble** is the CA. It requires EAB, issues 7-day certificates, and validates DNS-01 against BIND.
 * cert-manager checks propagation directly against BIND (`recursive_nameservers`).
