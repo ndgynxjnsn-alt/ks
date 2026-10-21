@@ -57,6 +57,8 @@ grafana.ini:
     check_for_plugin_updates: false
   plugins:
     preinstall_disabled: true   # offline: the Drilldown apps ship in plugins-bundled
+  news:
+    news_feed_enabled: false    # "Latest from the blog" on the home dashboard needs grafana.com/news.xml (offline)
   feature_toggles:            # individual entries (feature_toggles.enable is deprecated)
     traceToProfiles: true
     tracesEmbeddedFlameGraph: true
