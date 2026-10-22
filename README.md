@@ -169,7 +169,8 @@ Requirements on the servers:
 
    Applications sync automatically with prune and self-heal. Argo CD's health check for `Application`
    (`k8s/values/argocd.yaml`) lets each wave wait for the previous one.
-5. Waits until every Application is healthy, then creates the Grafana org per tenant through the API.
+5. Waits until every Application is synced and healthy, except apps marked `wait: false` (the demo: its image
+   arrives with `demo.yml` afterwards). Then it creates the Grafana org per tenant through the API.
 
 To change something, edit, commit and run `lgtm.yml` again, or just push when Argo CD reads your Git server.
 Clusters set up by earlier versions with plain Helm migrate in place: the Helm release records are deleted and
@@ -201,6 +202,8 @@ route, which is why plain http stays enabled. cert-manager renews each certifica
 **Lab:**
 * **Pebble** is the CA. It requires EAB, issues 7-day certificates, and resolves the hostnames on the lab DNS
   (**BIND**, `lab/external`, port 10053, `*.lgtm.company.org` → ingress VIP) to validate HTTP-01.
+* Before asking the CA, cert-manager fetches the challenge itself. The cluster DNS doesn't know the lab domain, so
+  `tls_issuer.http01_check_nameservers` points that self check at the lab DNS.
 * Browsers don't trust Pebble's root (`https://192.168.56.1:15000/roots/0`).
 
 ```bash
