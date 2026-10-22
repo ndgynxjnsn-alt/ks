@@ -9,9 +9,8 @@ tls:
   issuer: company-ca
   acmeServer: ""
   email: ""
-  eabKeyID: ""               # EAB HMAC key and TSIG secret: Secrets <issuer>-eab / <issuer>-tsig (Ansible)
+  eabKeyID: ""               # the EAB HMAC key is the Secret <issuer>-eab (created by Ansible)
   caBundle: ""               # base64 PEM of the ACME server's CA ("" = publicly trusted)
-  dns01: { nameserver: "", tsigKeyName: "", tsigAlgorithm: HMACSHA256 }
 grafanaDB:
   image: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
   instances: 3

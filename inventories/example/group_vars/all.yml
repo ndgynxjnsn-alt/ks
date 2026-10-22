@@ -24,7 +24,7 @@ tenants:
   - name: platform               # the cluster itself: pod logs and metrics (Alloy)
     dashboards: [cluster-health.json]
 
-# ---------------------------------------------------------------- TLS: company CA (ACME + EAB, DNS-01 via RFC2136)
+# ---------------------------------------------------------------- TLS: company CA (ACME + EAB, HTTP-01)
 tls_issuer:
   name: company-ca
   acme_server: https://ca.company.org/acme/directory
@@ -32,12 +32,6 @@ tls_issuer:
   eab_kid: "{{ vault_acme_eab_kid }}"
   eab_hmac_key: "{{ vault_acme_eab_hmac_key }}"
   ca_bundle_file: ""                       # "" if the ACME endpoint has a publicly trusted certificate
-  dns01:
-    nameserver: 10.0.0.53:53               # primary DNS server of the zone lgtm.company.org
-    tsig_key_name: lgtm-acme
-    tsig_algorithm: HMACSHA256
-    tsig_secret: "{{ vault_dns_tsig_secret }}"
-    # recursive_nameservers: 10.0.0.53:53  # only if public resolvers can't see the zone
 
 # ---------------------------------------------------------------- OAuth: company IdP (OIDC)
 oauth:

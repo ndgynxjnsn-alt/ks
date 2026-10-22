@@ -7,8 +7,8 @@
 # Two floating IPs (kube-vip, ARP), both move to a surviving node when one fails:
 vip: 192.168.56.10            # Kubernetes API (6443) and RKE2 join (9345)
 ingress_vip: 192.168.56.20    # every LGTM hostname -> Traefik, which routes by Host header
-# Hostnames are <name>.<domain> (names in lgtm_hosts, ansible/group_vars/all.yml), all covered by one
-# wildcard certificate *.<domain>. DNS: *.<domain> -> ingress_vip (lab: BIND in lab/external + /etc/hosts).
+# Hostnames are <name>.<domain> (names in lgtm_hosts below), each with its own certificate.
+# DNS: *.<domain> -> ingress_vip (lab: BIND in lab/external, or /etc/hosts).
 domain: lgtm.company.org
 # Hostnames served on the ingress VIP (backends: ansible/templates/ingress.yaml.j2). Remove one to unpublish it.
 lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
@@ -50,29 +50,19 @@ gitea_version: 1.27.3
 bind_version: "9.20"
 
 # ---------------------------------------------------------------- TLS
-# One wildcard certificate *.<domain> (+ <domain>) from the CA via ACME with External Account Binding (the CA
-# hands out a key id + HMAC key). Wildcards require the DNS-01 challenge: cert-manager writes the
-# _acme-challenge TXT record with RFC2136 dynamic updates (TSIG key) into the DNS zone of <domain>.
-# cert-manager renews automatically (default: 1/3 of the lifetime before expiry).
-# Lab: CA = Pebble, DNS = BIND (both in lab/external). Company: its ACME endpoint + EAB credentials and the
-# DNS server/TSIG key of the zone (put secrets in ansible-vault).
+# One certificate per hostname from the CA via ACME with External Account Binding (the CA hands out a key id +
+# HMAC key) and the HTTP-01 challenge over port 80; cert-manager renews them (1/3 of the lifetime before expiry).
+# Lab: CA = Pebble (lab/external), which resolves the hostnames via the lab DNS (BIND).
+# Company: its ACME endpoint + EAB credentials (put secrets in ansible-vault).
 tls_issuer:
   name: company-ca
   acme_server: "https://{{ external_host_ip }}:14000/dir"     # ACME directory URL
   email: observability@example.corp                          # ACME account contact
   eab_kid: lgtm-observability                                # EAB key id issued by the CA
-  eab_hmac_key: "{{ lookup('password', secrets_dir + '/acme_eab_hmac_key chars=ascii_letters,digits length=64') }}"
+  eab_hmac_key: >-
+    {{ lookup('password', secrets_dir + '/acme_eab_hmac_key chars=ascii_letters,digits length=64') }}
   # PEM of the CA that signed the ACME server's TLS certificate (path on the Ansible host, "" = public CA)
   ca_bundle_file: "{{ repo_dir }}/lab/external/.generated/pebble/acme-ca.crt"
-  dns01:
-    nameserver: "{{ external_host_ip }}:10053"     # authoritative for <domain>, accepts RFC2136 updates
-    tsig_key_name: lgtm-acme
-    tsig_algorithm: HMACSHA256
-    tsig_secret: >-
-      {{ lookup('password', secrets_dir + '/dns_tsig_secret chars=ascii_letters,digits length=44') | b64encode }}
-    # cert-manager checks that the TXT record is visible before telling the CA; the lab zone isn't in
-    # public DNS, so it asks the zone's server directly. Omit for a zone that public resolvers can see.
-    recursive_nameservers: "{{ external_host_ip }}:10053"
 
 # ---------------------------------------------------------------- OAuth (Grafana <-> Keycloak)
 # Users and groups live in the Keycloak realm (lab/templates/keycloak-realm.json.j2).

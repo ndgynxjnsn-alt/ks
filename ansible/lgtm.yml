@@ -21,7 +21,6 @@
           version: "{{ charts['cert-manager'].version }}"
           namespace: cert-manager
           wave: -3
-          values: "{{ cert_manager_overlay }}"
         cloudnative-pg:
           version: "{{ charts['cloudnative-pg'].version }}"
           namespace: cnpg-system
@@ -59,17 +58,7 @@
         caBundle: >-
           {{ lookup('file', tls_issuer.ca_bundle_file) | b64encode
              if tls_issuer.ca_bundle_file and tls_issuer.ca_bundle_file is file else '' }}
-        dns01:
-          nameserver: "{{ tls_issuer.dns01.nameserver }}"
-          tsigKeyName: "{{ tls_issuer.dns01.tsig_key_name }}"
-          tsigAlgorithm: "{{ tls_issuer.dns01.tsig_algorithm }}"
       grafanaDB: { image: "{{ grafana_db_image }}", instances: 3, size: 1Gi }
-
-    # DNS-01 propagation check against the zone's own server (zones invisible to public resolvers)
-    cert_manager_overlay: >-
-      {{ {'extraArgs': ['--dns01-recursive-nameservers-only',
-                        '--dns01-recursive-nameservers=' ~ tls_issuer.dns01.recursive_nameservers]}
-         if tls_issuer.dns01.recursive_nameservers is defined else {} }}
 
     grafana_overlay:
       grafana.ini:
@@ -120,7 +109,7 @@
                 | list)) | join(' ') }}
 
   tasks:
-    - name: Secrets (namespaces, S3, Grafana admin + OAuth, EAB, TSIG, repository credentials)
+    - name: Secrets (namespaces, S3, Grafana admin + OAuth, EAB, repository credentials)
       ansible.builtin.include_tasks: tasks/apply-set.yml
       vars:
         set_name: secrets
@@ -130,38 +119,6 @@
     - name: Publish repository and charts
       ansible.builtin.include_tasks: tasks/gitops-publish.yml
       when: gitops.publish is defined
-
-    # Releases installed by earlier versions of this playbook (plain Helm): forget them (delete Helm's
-    # release records, keep the resources) so Argo CD adopts the resources without downtime.
-    - name: Forget Helm releases now managed by Argo CD
-      ansible.builtin.command: >-
-        {{ kubectl }} delete secret -A -l 'owner=helm,name in ({{ root_values.apps.keys() | join(',') }})'
-        --ignore-not-found
-      register: forgotten
-      changed_when: "'deleted' in forgotten.stdout"
-
-    # Earlier versions applied these with Ansible (label lgtm/set). Objects with the same names are adopted
-    # by Argo CD; only the per-hostname VIP Services of the old design have no successor.
-    - name: List kube-system Services
-      ansible.builtin.command: "{{ kubectl }} -n kube-system get services -o json"
-      register: kube_system_services
-      changed_when: false
-
-    - name: Remove the per-hostname VIP Services of earlier versions
-      ansible.builtin.command: "{{ kubectl }} -n kube-system delete service {{ item }}"
-      loop: >-
-        {{ (kube_system_services.stdout | from_json)['items'] | map(attribute='metadata.name')
-           | select('match', '^vip-') | reject('equalto', 'vip-ingress') | list }}
-      changed_when: true
-
-    # The per-hostname design requested one certificate per Ingress (cert-manager ingress-shim); the
-    # wildcard certificate replaces them.
-    - name: Remove the per-hostname certificates of earlier versions
-      ansible.builtin.command: >-
-        {{ kubectl }} -n lgtm delete certificate --ignore-not-found
-        {{ lgtm_hosts | map('regex_replace', '$', '-tls') | join(' ') }}
-      register: old_certs
-      changed_when: "'deleted' in old_certs.stdout"
 
     - name: Install Argo CD
       ansible.builtin.command:

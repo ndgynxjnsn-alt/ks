@@ -7,3 +7,4 @@ apps/demo/target/
 *.log
 artifacts/
 lab/external/.generated/
+.ansible/

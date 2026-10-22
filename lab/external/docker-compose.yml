@@ -3,8 +3,8 @@
 #
 #   keycloak  http://keycloak.company.org:8080   OAuth/OIDC for Grafana (realm "lgtm", client "grafana")
 #   pebble    https://192.168.56.1:14000/dir     ACME server with External Account Binding (the "company CA")
-#   bind      192.168.56.1:10053 (udp+tcp)        authoritative DNS for lgtm.company.org: *.lgtm.company.org
-#                                                -> ingress VIP, RFC2136 updates with the TSIG key (DNS-01)
+#   bind      192.168.56.1:10053 (udp+tcp)       authoritative DNS for lgtm.company.org: *.lgtm.company.org
+#                                                -> ingress VIP (Pebble resolves the hosts for HTTP-01 here)
 #   gitea     http://192.168.56.1:3000           Git repository + Helm chart repository for Argo CD
 name: lgtm-external
 
@@ -24,7 +24,7 @@ services:
 
   pebble:
     image: ghcr.io/letsencrypt/pebble:2.10.1
-    # DNS-01: Pebble looks up the _acme-challenge TXT records on the lab DNS server
+    # HTTP-01: Pebble resolves <name>.lgtm.company.org on the lab DNS server (-> ingress VIP)
     command: ["-config", "/config/pebble-config.json", "-dnsserver", "bind:53"]
     environment:
       PEBBLE_VA_NOSLEEP: "1"                   # validate challenges immediately

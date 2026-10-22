@@ -19,7 +19,7 @@
     - name: Writable zone directory (named runs as user bind in the container)
       ansible.builtin.file: { path: "{{ gen }}/bind/zones", state: directory, mode: "0777" }
 
-    - name: BIND configuration (zone + TSIG key)
+    - name: BIND configuration (zone)
       ansible.builtin.template: { src: templates/named.conf.j2, dest: "{{ gen }}/bind/named.conf", mode: "0644" }
       notify: Restart bind
 

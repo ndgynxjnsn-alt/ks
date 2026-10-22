@@ -1,6 +1,8 @@
-{{- /* One wildcard certificate *.<domain> for all hostnames, from the CA via ACME with External Account
-       Binding. Wildcards need DNS-01: cert-manager writes _acme-challenge.<domain> TXT records with RFC2136
-       dynamic updates (TSIG). The EAB HMAC key and TSIG secret are Secrets created by Ansible. */ -}}
+{{- /* The company CA as certificate issuer: ACME with External Account Binding (the CA hands out a key id + HMAC
+       key; only that external account gets certificates). Challenge HTTP-01: the CA fetches a token from
+       http://<host>/.well-known/acme-challenge/, which cert-manager serves through a temporary Traefik route.
+       Every https Ingress requests its own certificate (templates/ingress.yaml). The EAB HMAC key is a Secret
+       created by Ansible. */ -}}
 {{- with .Values.tls }}
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -18,32 +20,7 @@ spec:
       keySecretRef: { name: {{ .issuer }}-eab, key: hmac-key }
     privateKeySecretRef: { name: {{ .issuer }}-acme-account }
     solvers:
-      - dns01:
-          rfc2136:
-            nameserver: {{ .dns01.nameserver | quote }}
-            tsigKeyName: {{ .dns01.tsigKeyName }}
-            tsigAlgorithm: {{ .dns01.tsigAlgorithm }}
-            tsigSecretSecretRef: { name: {{ .issuer }}-tsig, key: tsig-secret }
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: lgtm-wildcard
-  namespace: lgtm
-spec:
-  secretName: lgtm-wildcard-tls
-  dnsNames: ["*.{{ $.Values.domain }}", "{{ $.Values.domain }}"]
-  issuerRef: { kind: ClusterIssuer, name: {{ .issuer }} }
-  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+      - http01:
+          ingress:
+            ingressClassName: traefik
 {{- end }}
----
-# Traefik serves the wildcard certificate for every https route (also Ingresses in other namespaces).
-# Until it is issued, Traefik falls back to its self-signed default certificate.
-apiVersion: traefik.io/v1alpha1
-kind: TLSStore
-metadata:
-  name: default
-  namespace: lgtm
-spec:
-  defaultCertificate:
-    secretName: lgtm-wildcard-tls

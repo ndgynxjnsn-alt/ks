@@ -1,5 +1,6 @@
 {{- /* Every hostname <name>.<domain> twice: plain http on Traefik's "web" entrypoint, and https on
-       "websecure" with the wildcard certificate (Traefik default TLSStore, templates/tls.yaml).
+       "websecure" with its own certificate, which cert-manager requests from the company CA (annotation) and
+       keeps renewed. (One Ingress with a tls: block would make Traefik serve that host on https only.)
        Only names listed in .Values.hosts are published. */ -}}
 {{- $routes := dict
   "grafana"   (list (list "/" "grafana" 80 "lgtm"))
@@ -23,11 +24,15 @@ metadata:
   namespace: {{ index (first $paths) 3 }}
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: {{ ternary "web" "websecure" (eq $scheme "http") }}
+    {{- if eq $scheme "https" }}
+    cert-manager.io/cluster-issuer: {{ $.Values.tls.issuer }}
+    {{- end }}
 spec:
   ingressClassName: traefik
   {{- if eq $scheme "https" }}
   tls:
-    - hosts: ["{{ $name }}.{{ $.Values.domain }}"]    # certificate: default TLSStore (wildcard)
+    - hosts: ["{{ $name }}.{{ $.Values.domain }}"]
+      secretName: {{ $name }}-tls
   {{- end }}
   rules:
     - host: {{ $name }}.{{ $.Values.domain }}

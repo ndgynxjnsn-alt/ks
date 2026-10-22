@@ -31,9 +31,12 @@
          | selectattr('value.size', 'equalto', '0.00 Bytes') | map(attribute='key') | sort }}
   when: zero_disks | length > 0
 
-- name: Stop garage
+- name: Installed services
+  ansible.builtin.service_facts:
+
+- name: Stop garage (if installed)
   ansible.builtin.systemd_service: { name: garage, state: stopped }
-  failed_when: false
+  when: "'garage.service' in ansible_facts.services"
 
 - name: Unmount all Garage data directories
   ansible.builtin.shell: |
