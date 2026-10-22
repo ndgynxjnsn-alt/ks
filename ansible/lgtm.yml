@@ -57,7 +57,8 @@
         app_list: "{{ root_values.apps | dict2items }}"
         waited: >-
           {{ ['lgtm'] + (app_list | selectattr('value.wait', 'undefined') | map(attribute='key') | list)
-             + (app_list | selectattr('value.wait', 'defined') | selectattr('value.wait') | map(attribute='key') | list) }}
+             + (app_list | selectattr('value.wait', 'defined') | selectattr('value.wait')
+                | map(attribute='key') | list) }}
         app_items: >-
           {{ (argo_apps.stdout | from_json)['items'] | selectattr('metadata.name', 'in', waited) | list }}
         healthy: >-
