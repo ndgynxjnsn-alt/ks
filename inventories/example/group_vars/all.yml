@@ -32,6 +32,7 @@ tls_issuer:
   eab_kid: "{{ vault_acme_eab_kid }}"
   eab_hmac_key: "{{ vault_acme_eab_hmac_key }}"
   ca_bundle_file: ""                       # "" if the ACME endpoint has a publicly trusted certificate
+  # http01_check_nameservers: 10.0.0.53:53 # only if the cluster DNS can't resolve <domain>
 
 # ---------------------------------------------------------------- OAuth: company IdP (OIDC)
 oauth:

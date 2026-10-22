@@ -63,6 +63,9 @@ tls_issuer:
     {{ lookup('password', secrets_dir + '/acme_eab_hmac_key chars=ascii_letters,digits length=64') }}
   # PEM of the CA that signed the ACME server's TLS certificate (path on the Ansible host, "" = public CA)
   ca_bundle_file: "{{ repo_dir }}/lab/external/.generated/pebble/acme-ca.crt"
+  # Before asking the CA to validate, cert-manager fetches the challenge itself. The lab domain only exists
+  # on the lab DNS, not in the cluster DNS, so cert-manager resolves the hostnames there.
+  http01_check_nameservers: "{{ external_host_ip }}:10053"
 
 # ---------------------------------------------------------------- OAuth (Grafana <-> Keycloak)
 # Users and groups live in the Keycloak realm (lab/templates/keycloak-realm.json.j2).

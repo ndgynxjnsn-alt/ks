@@ -10,6 +10,11 @@ apps:
     version: "{{ charts['cert-manager'].version }}"
     namespace: cert-manager
     wave: -3
+{% if tls_issuer.http01_check_nameservers is defined %}
+    values:
+      # cert-manager's HTTP-01 self check resolves the hostnames on these DNS servers (cluster DNS can't)
+      extraArgs: ["--acme-http01-solver-nameservers={{ tls_issuer.http01_check_nameservers }}"]
+{% endif %}
   cloudnative-pg:
     version: "{{ charts['cloudnative-pg'].version }}"
     namespace: cnpg-system
@@ -47,3 +52,4 @@ apps:
     path: k8s/demo
     namespace: demo
     wave: 2
+    wait: false                   # its image comes from demo.yml (run after lgtm.yml): lgtm.yml doesn't wait for it

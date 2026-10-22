@@ -53,13 +53,18 @@
       register: argo_apps
       changed_when: false
       vars:
-        app_items: "{{ (argo_apps.stdout | from_json)['items'] }}"
+        # the root app plus every app that isn't marked wait: false
+        app_list: "{{ root_values.apps | dict2items }}"
+        waited: >-
+          {{ ['lgtm'] + (app_list | selectattr('value.wait', 'undefined') | map(attribute='key') | list)
+             + (app_list | selectattr('value.wait', 'defined') | selectattr('value.wait') | map(attribute='key') | list) }}
+        app_items: "{{ (argo_apps.stdout | from_json)['items'] | selectattr('metadata.name', 'in', waited) | list }}"
         healthy: >-
           {{ app_items | selectattr('status.health.status', 'defined')
              | selectattr('status.health.status', 'equalto', 'Healthy')
              | selectattr('status.sync.status', 'equalto', 'Synced') | list }}
       until: >-
-        argo_apps.rc == 0 and app_items | length == root_values.apps | length + 1
+        argo_apps.rc == 0 and app_items | length == waited | length
         and healthy | length == app_items | length
       retries: 90
       delay: 20
