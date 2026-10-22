@@ -33,17 +33,17 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 | Component | Version | Mode / HA |
 |---|---|---|
 | RKE2 | v1.37.1+rke2r1 | 3 servers, embedded etcd (quorum 2/3), all schedulable, air-gap tarball install |
-| kube-vip | v1.2.4 | DaemonSet, ARP: control-plane VIP + one LoadBalancer IP for Traefik |
+| kube-vip | v1.3.1 | DaemonSet, ARP: control-plane VIP + one LoadBalancer IP for Traefik |
 | Traefik | bundled with RKE2 | DaemonSet. Routes `*.<domain>` by Host header, http + https |
 | Argo CD | 3.5.5 (chart 10.10.5) | app of apps from Git + Helm repository, automatic sync, prune, self-heal |
-| cert-manager | v1.21.2 | wildcard certificate `*.<domain>` (ACME + EAB, DNS-01 via RFC2136), automatic renewal |
+| cert-manager | v1.21.2 | one certificate per hostname (ACME + EAB, HTTP-01), automatic renewal |
 | Garage (S3) | v2.4.1 | systemd on every server, replication factor 3, see [docs/s3-storage.md](docs/s3-storage.md) |
-| Loki | 3.7.8 (chart 18.15.0) | monolithic, 3 replicas, replication factor 3, multi-tenant |
-| Mimir | 3.2.2 ([NGDATA fork](https://github.com/NGDATA/mimir) chart 6.0.6) | monolithic, 3 replicas, replication factor 3, multi-tenant |
-| Tempo | 3.1.0 (chart 3.1.0) | monolithic, 1 replica (see [Fault tolerance](#fault-tolerance)), multi-tenant |
-| Pyroscope | 2.3.2 (chart 2.3.2) | monolithic (v2 storage), 3 replicas, raft metastore, multi-tenant |
-| Alloy | 1.20.1 (chart 1.13.1) | DaemonSet: OTLP, profiles, pod logs, OTLP/JSON import, cluster metrics |
-| Grafana | 13.2.3 (chart 13.4.0) | 2 replicas on PostgreSQL, one org per tenant, OAuth; Drilldown apps baked into the image |
+| Loki | 3.7.9 (chart 19.0.3) | monolithic, 3 replicas, replication factor 3, multi-tenant |
+| Mimir | 3.2.3 ([NGDATA fork](https://github.com/NGDATA/mimir) chart 6.0.6) | monolithic, 3 replicas, replication factor 3, multi-tenant |
+| Tempo | 3.1.1 (chart 3.2.1) | monolithic, 1 replica (see [Fault tolerance](#fault-tolerance)), multi-tenant |
+| Pyroscope | 2.4.1 (chart 2.4.1) | monolithic (v2 storage), 3 replicas, raft metastore, multi-tenant |
+| Alloy | 1.21.1 (chart 1.14.2) | DaemonSet: OTLP, profiles, pod logs, OTLP/JSON import, cluster metrics |
+| Grafana | 13.2.4 (chart 14.0.1) | 2 replicas on PostgreSQL, one org per tenant, OAuth; Drilldown apps baked into the image |
 | CloudNativePG | operator 1.30.1, PostgreSQL 18.6 | Grafana's database, 3 instances, automatic failover |
 | kube-state-metrics | 2.20.0 (chart 8.6.0) | object state for the "Cluster health" dashboard |
 | OS | Ubuntu 26.04 LTS | `sudo-rs` replaced by classic sudo (Ansible's become can't drive sudo-rs) |
@@ -64,6 +64,8 @@ argocd/
   root/                           app of apps: one Argo CD Application per component
   platform/                       ingress VIP, ingresses, TLS, Grafana database, dashboards
 k8s/values/                       Helm values of every chart (no secrets)
+k8s/alloy/                        Alloy pipeline (config.alloy) and the OTLP/JSON import script
+k8s/argocd/                       Argo CD resource health check (Lua)
 k8s/demo/                         demo app manifests
 apps/demo/                        Spring Boot demo app
 inventories/example/              template for a real site (all site settings)
@@ -71,6 +73,7 @@ lab/                              LAB ONLY
   Vagrantfile                     3 Ubuntu 26.04 VMs, 5 data disks each, isolated networks
   inventory/                      lab servers + lab site settings
   external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea
+  templates/                      their configuration (Keycloak realm, Pebble, BIND, keycloak.env)
 docs/s3-storage.md                S3 storage research and decision (Garage)
 ```
 
@@ -86,6 +89,7 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 
 ```bash
 ansible-playbook ansible/download.yml                        # online: everything into artifacts/ (~3 GB)
+(cd lab && vagrant destroy -f)                               # optional: start from scratch
 (cd lab && vagrant up)                                       # 3 bare VMs on isolated networks
 ansible-playbook -i lab/inventory lab/external.yml -K        # Keycloak, Pebble (CA), BIND (DNS), Gitea (Git+Helm)
 ansible-playbook -i lab/inventory ansible/site.yml           # offline: Garage, RKE2 HA + kube-vip, ./kubeconfig
@@ -112,6 +116,16 @@ Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 10053 graf
 Everything is also served on plain http. Secrets are generated on first use, one file each in `.secrets/`
 (ignored by git).
 
+## Helm charts and compliance
+
+`download.yml` pulls every chart from its **OCI** registry where the publisher provides one, and writes
+`artifacts/helm-charts-oci.txt`: chart, version, `oci://` reference and manifest digest. Two charts have no OCI
+artifact:
+* **Alloy** is only published to the HTTPS repository `https://grafana.github.io/helm-charts`.
+* **Mimir** comes from the NGDATA fork and is packaged from Git; the file records the commit.
+
+Versions are in `ansible/group_vars/all.yml` (`charts`).
+
 ## A real site
 
 Copy `inventories/example` to `inventories/<site>`, then fill in:
@@ -120,7 +134,6 @@ Copy `inventories/example` to `inventories/<site>`, then fill in:
 * two free IPs;
 * the domain;
 * the company CA (ACME URL and EAB credentials);
-* the DNS server and TSIG key of the zone;
 * the IdP;
 * the Git and Helm repositories Argo CD reads from.
 
@@ -136,7 +149,7 @@ Requirements on the servers:
 
 `ansible/lgtm.yml` runs these steps:
 1. Creates all **Secrets** (`ansible/templates/secrets.yaml.j2`): S3 keys, Grafana admin and OAuth client,
-   ACME EAB key, TSIG key, Garage metrics token, and repository credentials. The values in Git only reference
+   ACME EAB key, Garage metrics token, and repository credentials. The values in Git only reference
    them. Loki, Mimir, Tempo and Pyroscope read the S3 keys from environment variables (`-config.expand-env`).
 2. **Publishes** (lab, `gitops.publish`): pushes the committed `HEAD` to Gitea and uploads `artifacts/charts/*.tgz`
    to Gitea's Helm repository. At a company, CI does this.
@@ -149,7 +162,7 @@ Requirements on the servers:
    | Wave | Apps |
    |---|---|
    | −3 | cert-manager, CloudNativePG (CRDs) |
-   | −2 | `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses, ClusterIssuer and wildcard Certificate, Traefik default TLSStore, PostgreSQL cluster, dashboards |
+   | −2 | `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster, dashboards |
    | 0 | Loki, Mimir, Tempo, Pyroscope, kube-state-metrics |
    | 1 | Alloy, Grafana |
    | 2 | demo |
@@ -179,23 +192,19 @@ Two floating IPs (kube-vip, ARP) move to a surviving server on failure:
 * `ingress_vip`: a LoadBalancer Service in front of Traefik (`externalTrafficPolicy: Local`). Traefik routes
   `<name>.<domain>` for every name in `lgtm_hosts` by Host header, on http and https.
 
-**One wildcard certificate** `*.<domain>` covers all hostnames. Traefik serves it for every https route via its
-default TLSStore. cert-manager gets it from the company CA through **ACME with External Account Binding**: the CA
-hands out a key id and HMAC key, and only that account receives certificates. cert-manager renews it automatically,
-when a third of its lifetime is left.
-
-Wildcards require the **DNS-01** challenge. cert-manager writes `_acme-challenge.<domain>` TXT records into the
-zone with **RFC2136** dynamic updates, authenticated by a TSIG key.
+**One certificate per hostname.** Every https Ingress carries the annotation `cert-manager.io/cluster-issuer`,
+and cert-manager requests a certificate for it (Secret `<name>-tls`) from the company CA. It uses **ACME with External
+Account Binding**: the CA hands out a key id and HMAC key, and only that account receives certificates. The challenge is
+**HTTP-01**: the CA fetches a token from `http://<host>/.well-known/acme-challenge/` through a temporary Traefik
+route, which is why plain http stays enabled. cert-manager renews each certificate when a third of its lifetime is left.
 
 **Lab:**
-* **BIND** (`lab/external`, port 10053) is authoritative for `lgtm.company.org`. The TSIG key may update only the
-  challenge record.
-* **Pebble** is the CA. It requires EAB, issues 7-day certificates, and validates DNS-01 against BIND.
-* cert-manager checks propagation directly against BIND (`recursive_nameservers`).
+* **Pebble** is the CA. It requires EAB, issues 7-day certificates, and resolves the hostnames on the lab DNS
+  (**BIND**, `lab/external`, port 10053, `*.lgtm.company.org` → ingress VIP) to validate HTTP-01.
 * Browsers don't trust Pebble's root (`https://192.168.56.1:15000/roots/0`).
 
 ```bash
-kubectl get clusterissuer company-ca ; kubectl -n lgtm get certificate lgtm-wildcard
+kubectl get clusterissuer company-ca ; kubectl get certificate -A
 ```
 
 ## Tenants
@@ -331,5 +340,14 @@ Notes:
 .bin/uvx --from ansible-lint ansible-lint      # production profile, lines <= 120 (.ansible-lint, .yamllint)
 .bin/uvx yamllint k8s lab/external
 ```
+
+**Style:** configuration lives in files with their own syntax, not in inline strings:
+* values overlays: `ansible/templates/*-values.yaml.j2`;
+* the Alloy pipeline: `k8s/alloy/config.alloy`;
+* scripts: `*.sh`; Lua: `*.lua`;
+* systemd units and other config files: role templates.
+
+**Re-runs from scratch:** removing something is idempotent (`state: absent` semantics). Objects or resource types
+that don't exist yet count as nothing to remove.
 
 `uv` is a single binary in `.bin/` (`curl -sfL https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz | tar xz -C .bin --strip-components=1`).
