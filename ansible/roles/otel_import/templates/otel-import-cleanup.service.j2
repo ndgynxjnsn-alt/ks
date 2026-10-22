@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Delete processed OTLP/JSON import files
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/find {{ otel_import_dir }} -mindepth 2 -maxdepth 2 -type f \
+  ( -name *.imported -o -name *.failed ) -mmin +{{ otel_import_keep_minutes }} -delete

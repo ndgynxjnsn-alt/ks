@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# kubectl, crictl and ctr from RKE2 in login shells on the node
+export PATH=$PATH:/var/lib/rancher/rke2/bin
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+export CONTAINER_RUNTIME_ENDPOINT=unix:///run/k3s/containerd/containerd.sock

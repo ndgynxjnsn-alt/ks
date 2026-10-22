@@ -63,12 +63,7 @@
         mode: "0644"
 
     - name: Keycloak admin credentials
-      ansible.builtin.copy:
-        dest: "{{ gen }}/keycloak.env"
-        mode: "0600"
-        content: |
-          KC_BOOTSTRAP_ADMIN_USERNAME=admin
-          KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
+      ansible.builtin.template: { src: templates/keycloak.env.j2, dest: "{{ gen }}/keycloak.env", mode: "0600" }
 
     - name: Start the containers
       ansible.builtin.command:

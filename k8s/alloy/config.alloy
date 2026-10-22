@@ -1,0 +1,337 @@
+// Grafana Alloy configuration (DaemonSet, one instance per node). Deployed as ConfigMap "alloy-config"
+// (k8s/alloy/kustomization.yaml); Alloy's config reloader picks up changes without a restart.
+//   OTLP (traces, metrics, logs) on 4317/4318 -> Tempo / Mimir / Loki, tenant = the sender's X-Scope-OrgID header
+//   Pyroscope push API on 9999            -> Pyroscope, tenant = the profile's "tenant" label
+//   Pod logs of every node (/var/log/pods) -> Loki, tenant "platform"
+//   OTLP/JSON files in /var/lib/otel-import/<tenant>/ -> the "import" receiver (sidecar otlp-json-import.sh)
+//   Cluster metrics of this node (node, kubelet/cAdvisor, etcd, Garage, component pods) -> Mimir, tenant "platform"
+
+// ---------------------------------------------------------------- OTLP
+// The sender's X-Scope-OrgID header travels with the data (include_metadata -> batch per tenant
+// -> otelcol.auth.headers) to the backends. Data without the header is rejected by them (401).
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint         = "0.0.0.0:4317"
+    include_metadata = true
+  }
+  http {
+    endpoint         = "0.0.0.0:4318"
+    include_metadata = true
+  }
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+// OTLP/JSON file import: the sidecar "otlp-json-import" (below) posts the files from
+// /var/lib/otel-import/<tenant>/ to this receiver (localhost only), with X-Scope-OrgID = <tenant>.
+otelcol.receiver.otlp "import" {
+  http {
+    endpoint         = "127.0.0.1:4320"
+    include_metadata = true
+  }
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  metadata_keys = ["X-Scope-OrgID"]
+  output {
+    metrics = [otelcol.exporter.otlphttp.mimir.input]
+    logs    = [otelcol.exporter.otlphttp.loki.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.auth.headers "tenant" {
+  header {
+    key          = "X-Scope-OrgID"
+    from_context = "X-Scope-OrgID"
+  }
+}
+
+otelcol.exporter.otlphttp "mimir" {
+  client {
+    endpoint = "http://mimir-monolithic.lgtm.svc:8080/otlp"
+    auth     = otelcol.auth.headers.tenant.handler
+  }
+}
+
+otelcol.exporter.otlphttp "loki" {
+  client {
+    endpoint = "http://loki.lgtm.svc:3100/otlp"
+    auth     = otelcol.auth.headers.tenant.handler
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo.lgtm.svc:4317"
+    tls { insecure = true }
+    auth     = otelcol.auth.headers.tenant.handler
+  }
+}
+
+// ---------------------------------------------------------------- Profiles
+// pyroscope.receive_http does not forward request headers, so the tenant comes from the profile label
+// "tenant" (Pyroscope agent: PYROSCOPE_LABELS=tenant=<name>). One relabel+write pair per tenant;
+// profiles without a known tenant label are dropped.
+pyroscope.receive_http "default" {
+  http {
+    listen_address = "0.0.0.0"
+    listen_port    = 9999
+  }
+  forward_to = [pyroscope.relabel.demo.receiver, pyroscope.relabel.platform.receiver]
+}
+
+pyroscope.relabel "demo" {
+  forward_to = [pyroscope.write.demo.receiver]
+  rule {
+    source_labels = ["tenant"]
+    regex         = "demo"
+    action        = "keep"
+  }
+  rule {
+    regex  = "tenant"
+    action = "labeldrop"
+  }
+}
+
+pyroscope.write "demo" {
+  endpoint {
+    url     = "http://pyroscope.lgtm.svc:4040"
+    headers = { "X-Scope-OrgID" = "demo" }
+  }
+}
+
+pyroscope.relabel "platform" {
+  forward_to = [pyroscope.write.platform.receiver]
+  rule {
+    source_labels = ["tenant"]
+    regex         = "platform"
+    action        = "keep"
+  }
+  rule {
+    regex  = "tenant"
+    action = "labeldrop"
+  }
+}
+
+pyroscope.write "platform" {
+  endpoint {
+    url     = "http://pyroscope.lgtm.svc:4040"
+    headers = { "X-Scope-OrgID" = "platform" }
+  }
+}
+
+// ---------------------------------------------------------------- Pod logs
+// Only pods on this node. The demo namespace is skipped: its logs arrive via OTLP.
+discovery.kubernetes "pods" {
+  role = "pod"
+  selectors {
+    role  = "pod"
+    field = "spec.nodeName=" + sys.env("HOSTNAME")
+  }
+}
+
+discovery.relabel "pods" {
+  targets = discovery.kubernetes.pods.targets
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    regex         = "demo"
+    action        = "drop"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_container_name"]
+    regex         = "^;(.+)$|^([^;]+);.*$"
+    replacement   = "$1$2"
+    target_label  = "service_name"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+    separator     = "/"
+    replacement   = "/var/log/pods/*$1/*.log"
+    target_label  = "__path__"
+  }
+}
+
+local.file_match "pods" {
+  path_targets = discovery.relabel.pods.output
+}
+
+loki.source.file "pods" {
+  targets    = local.file_match.pods.targets
+  forward_to = [loki.process.pods.receiver]
+}
+
+loki.process "pods" {
+  stage.cri {}
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------- Cluster self-observability
+// Every Alloy instance (DaemonSet) collects only its own node, so nothing is scraped twice. All of it
+// goes to Mimir as tenant "platform" (dashboard "Cluster health"), with the label node=<node name>.
+prometheus.remote_write "platform" {
+  endpoint {
+    url     = "http://mimir-monolithic.lgtm.svc:8080/api/v1/push"
+    headers = { "X-Scope-OrgID" = "platform" }
+  }
+}
+
+prometheus.relabel "node" {
+  forward_to = [prometheus.remote_write.platform.receiver]
+  rule {
+    target_label = "node"
+    replacement  = sys.env("HOSTNAME")
+  }
+}
+
+// node exporter (built into Alloy) on the host's /proc, /sys and /
+prometheus.exporter.unix "node" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|run|sys|var/lib/kubelet|var/lib/rancher/rke2/agent/containerd)($|/)"
+  }
+}
+
+prometheus.scrape "node" {
+  job_name   = "node"
+  targets    = prometheus.exporter.unix.node.targets
+  forward_to = [prometheus.relabel.node.receiver]
+}
+
+// kubelet and cAdvisor of this node (service account token; the chart's RBAC grants nodes/metrics)
+prometheus.scrape "kubelet" {
+  job_name          = "kubelet"
+  targets           = [{ "__address__" = sys.env("NODE_IP") + ":10250" }]
+  scheme            = "https"
+  bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  tls_config { insecure_skip_verify = true }
+  forward_to        = [prometheus.relabel.kubelet.receiver]
+}
+
+prometheus.relabel "kubelet" {
+  forward_to = [prometheus.relabel.node.receiver]
+  rule {
+    source_labels = ["__name__"]
+    regex         = "up|kubelet_running_pods|kubelet_running_containers|" +
+                    "kubelet_volume_stats_(used|capacity)_bytes"
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "cadvisor" {
+  job_name          = "cadvisor"
+  targets           = [{ "__address__" = sys.env("NODE_IP") + ":10250" }]
+  scheme            = "https"
+  metrics_path      = "/metrics/cadvisor"
+  bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  tls_config { insecure_skip_verify = true }
+  forward_to        = [prometheus.relabel.cadvisor.receiver]
+}
+
+// cAdvisor is large: keep CPU/memory/network per container only
+prometheus.relabel "cadvisor" {
+  forward_to = [prometheus.relabel.node.receiver]
+  rule {
+    source_labels = ["__name__"]
+    regex         = "up|container_cpu_usage_seconds_total|container_memory_working_set_bytes|" +
+                    "container_network_(receive|transmit)_bytes_total"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__name__", "container"]
+    regex         = "container_(cpu|memory).*;(|POD)"
+    action        = "drop"
+  }
+}
+
+// etcd of this node (RKE2 etcd-expose-metrics) and Garage (admin API, metrics_token)
+prometheus.scrape "etcd" {
+  job_name   = "etcd"
+  targets    = [{ "__address__" = sys.env("NODE_IP") + ":2381" }]
+  forward_to = [prometheus.relabel.node.receiver]
+}
+
+prometheus.scrape "garage" {
+  job_name     = "garage"
+  targets      = [{ "__address__" = sys.env("NODE_IP") + ":3903" }]
+  bearer_token = sys.env("GARAGE_METRICS_TOKEN")
+  forward_to   = [prometheus.relabel.node.receiver]
+}
+
+// metrics ports of the platform components running on this node (namespace;port)
+discovery.relabel "component_pods" {
+  targets = discovery.kubernetes.pods.targets
+  rule {
+    source_labels = ["__meta_kubernetes_pod_phase"]
+    regex         = "Running"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_port_number"]
+    regex         = "lgtm;(3100|8080|3200|4040|3000|12345|9187)|cert-manager;9402|cnpg-system;8080|" +
+                    "argocd;(8082|8083|8084)|kube-system;(8080|9100|9153)"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = [
+      "__meta_kubernetes_namespace",
+      "__meta_kubernetes_pod_label_app_kubernetes_io_name",
+      "__meta_kubernetes_pod_container_name",
+    ]
+    regex         = "([^;]+);(?:([^;]+);.*|;(.+))"
+    replacement   = "$1/$2$3"
+    target_label  = "job"
+  }
+}
+
+prometheus.scrape "component_pods" {
+  job_name   = "component-pods"
+  targets    = discovery.relabel.component_pods.output
+  forward_to = [prometheus.relabel.node.receiver]
+}
+
+// Alloy itself
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  job_name   = "alloy"
+  targets    = prometheus.exporter.self.alloy.targets
+  forward_to = [prometheus.relabel.node.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url       = "http://loki.lgtm.svc:3100/loki/api/v1/push"
+    tenant_id = "platform"
+  }
+}

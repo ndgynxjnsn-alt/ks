@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Default route via default_gateway (inventory) - the lab network is isolated and has none otherwise.
+network:
+  version: 2
+  ethernets:
+    {{ rke2_iface }}:
+      routes: [{ to: default, via: {{ default_gateway }} }]

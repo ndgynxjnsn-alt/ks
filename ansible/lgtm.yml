@@ -7,106 +7,9 @@
   gather_facts: false
   vars:
     kubectl: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig"
-    tenant_names: "{{ tenants | map(attribute='name') | list }}"
 
-    # ------------------------------------------------------------ values of the root app (argocd/root)
-    # apps: one Argo CD Application each; waves: CRD providers -> platform resources -> backends -> rest
-    root_values:
-      repo:
-        git: "{{ gitops.repo_url }}"
-        revision: "{{ gitops.revision }}"
-        helm: "{{ gitops.helm_repo_url }}"
-      apps:
-        cert-manager:
-          version: "{{ charts['cert-manager'].version }}"
-          namespace: cert-manager
-          wave: -3
-        cloudnative-pg:
-          version: "{{ charts['cloudnative-pg'].version }}"
-          namespace: cnpg-system
-          wave: -3
-        kube-state-metrics:
-          version: "{{ charts['kube-state-metrics'].version }}"
-          namespace: kube-system
-          wave: 0
-        platform:
-          path: argocd/platform
-          wave: -2
-          values: "{{ platform_values }}"
-        loki: { version: "{{ charts.loki.version }}", wave: 0 }
-        mimir: { chart: mimir-distributed, version: "{{ mimir_chart.version }}", wave: 0 }
-        tempo: { version: "{{ charts.tempo.version }}", wave: 0 }
-        pyroscope: { version: "{{ charts.pyroscope.version }}", wave: 0 }
-        alloy: { version: "{{ charts.alloy.version }}", wave: 1 }
-        grafana:
-          version: "{{ charts.grafana.version }}"
-          wave: 1
-          values: "{{ grafana_overlay | combine(grafana_oauth_overlay if oauth.enabled else {}, recursive=true) }}"
-        demo: { path: k8s/demo, namespace: demo, wave: 2 }
-
-    # cluster-level resources (argocd/platform): ingress VIP, ingresses, TLS, Grafana database
-    platform_values:
-      domain: "{{ domain }}"
-      ingressVIP: "{{ ingress_vip }}"
-      hosts: "{{ lgtm_hosts }}"
-      traefikSelector: "{{ traefik_selector }}"
-      tls:
-        issuer: "{{ tls_issuer.name }}"
-        acmeServer: "{{ tls_issuer.acme_server }}"
-        email: "{{ tls_issuer.email }}"
-        eabKeyID: "{{ tls_issuer.eab_kid }}"
-        caBundle: >-
-          {{ lookup('file', tls_issuer.ca_bundle_file) | b64encode
-             if tls_issuer.ca_bundle_file and tls_issuer.ca_bundle_file is file else '' }}
-      grafanaDB: { image: "{{ grafana_db_image }}", instances: 3, size: 1Gi }
-
-    grafana_overlay:
-      grafana.ini:
-        server:
-          domain: "grafana.{{ domain }}"
-          root_url: "https://grafana.{{ domain }}"   # absolute links; the UI also works on http
-      # Main org: all tenants (cross-tenant queries); tenant orgs are set up via the API below
-      datasources:
-        datasources.yaml:
-          apiVersion: 1
-          datasources: >-
-            {{ lookup('template', 'templates/grafana-datasources.yaml.j2',
-                      template_vars={'ds_tenants': tenant_names, 'ds_dollar': '$$'}) | from_yaml }}
-
-    # Login via the IdP. Group -> Grafana org/role:
-    #   grafana-admins -> Admin in every org + Grafana server admin;  tenant-<name> -> Editor in org <name>
-    # auto_assign_org is off, so tenant users don't land in the Main org (which sees all tenants).
-    grafana_oauth_overlay:
-      hostAliases: "{{ [{'ip': oauth.host_ip, 'hostnames': [oauth.hostname]}] if oauth.host_ip is defined else [] }}"
-      envValueFrom:
-        GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
-          secretKeyRef: { name: grafana-oauth, key: client-secret }
-      grafana.ini:
-        users:
-          auto_assign_org: false
-        auth.generic_oauth:
-          enabled: true
-          name: Keycloak
-          allow_sign_up: true
-          client_id: "{{ oauth.client_id }}"
-          scopes: openid email profile
-          use_pkce: true
-          auth_url: "{{ oauth.issuer }}/protocol/openid-connect/auth"
-          token_url: "{{ oauth.issuer }}/protocol/openid-connect/token"
-          api_url: "{{ oauth.issuer }}/protocol/openid-connect/userinfo"
-          signout_redirect_url: >-
-            {{ oauth.issuer }}/protocol/openid-connect/logout?client_id={{ oauth.client_id
-            }}&post_logout_redirect_uri={{ ('https://grafana.' ~ domain ~ '/login') | urlencode | replace('/', '%2F') }}
-          login_attribute_path: preferred_username
-          email_attribute_path: email
-          name_attribute_path: name
-          groups_attribute_path: groups
-          role_attribute_path: "contains(groups[*], 'grafana-admins') && 'GrafanaAdmin' || 'Viewer'"
-          allow_assign_grafana_admin: true
-          org_attribute_path: groups
-          org_mapping: >-
-            {{ (['grafana-admins:*:Admin'] + (tenant_names | map('regex_replace', '^(.*)$', 'tenant-\1:\1:Editor')
-                | list)) | join(' ') }}
+    # values of the root app, incl. the platform and Grafana overlays (ansible/templates/*-values.yaml.j2)
+    root_values: "{{ lookup('template', 'templates/root-values.yaml.j2') | from_yaml }}"
 
   tasks:
     - name: Secrets (namespaces, S3, Grafana admin + OAuth, EAB, repository credentials)
@@ -131,6 +34,8 @@
           - --kubeconfig={{ repo_dir }}/kubeconfig
           - --namespace=argocd
           - --values={{ repo_dir }}/k8s/values/argocd.yaml
+          - --set-file=configs.cm.resource\.customizations\.health\.argoproj\.io_Application={{
+            repo_dir }}/k8s/argocd/application-health.lua
           - --wait
           - --timeout=10m
       register: argocd_install

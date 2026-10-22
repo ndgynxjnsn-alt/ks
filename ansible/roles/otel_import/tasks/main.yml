@@ -26,29 +26,16 @@
   loop_control: { label: "{{ item.name }}" }
 
 - name: Cleanup service
-  ansible.builtin.copy:
+  ansible.builtin.template:
     dest: /etc/systemd/system/otel-import-cleanup.service
     mode: "0644"
-    content: |
-      [Unit]
-      Description=Delete processed OTLP/JSON import files
-      [Service]
-      Type=oneshot
-      ExecStart=/usr/bin/find {{ otel_import_dir }} -mindepth 2 -maxdepth 2 -type f \
-        ( -name *.imported -o -name *.failed ) -mmin +{{ otel_import_keep_minutes }} -delete
+    src: otel-import-cleanup.service.j2
 
 - name: Cleanup timer (every 15 minutes)
-  ansible.builtin.copy:
+  ansible.builtin.template:
     dest: /etc/systemd/system/otel-import-cleanup.timer
     mode: "0644"
-    content: |
-      [Unit]
-      Description=Delete processed OTLP/JSON import files periodically
-      [Timer]
-      OnBootSec=5min
-      OnUnitActiveSec=15min
-      [Install]
-      WantedBy=timers.target
+    src: otel-import-cleanup.timer.j2
 
 - name: Enable cleanup timer
   ansible.builtin.systemd_service:

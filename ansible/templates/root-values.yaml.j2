@@ -1,0 +1,49 @@
+# {{ ansible_managed }}
+# Values of the root app (argocd/root): one Argo CD Application per entry in "apps".
+# Sync waves: CRD providers (-3) -> platform resources (-2) -> backends (0) -> Alloy, Grafana (1) -> demo (2)
+repo:
+  git: "{{ gitops.repo_url }}"
+  revision: "{{ gitops.revision }}"
+  helm: "{{ gitops.helm_repo_url }}"
+apps:
+  cert-manager:
+    version: "{{ charts['cert-manager'].version }}"
+    namespace: cert-manager
+    wave: -3
+  cloudnative-pg:
+    version: "{{ charts['cloudnative-pg'].version }}"
+    namespace: cnpg-system
+    wave: -3
+  platform:
+    path: argocd/platform
+    wave: -2
+    values: {{ lookup('template', 'platform-values.yaml.j2') | from_yaml | to_json }}
+  kube-state-metrics:
+    version: "{{ charts['kube-state-metrics'].version }}"
+    namespace: kube-system
+    wave: 0
+  loki:
+    version: "{{ charts.loki.version }}"
+    wave: 0
+  mimir:
+    chart: mimir-distributed
+    version: "{{ mimir_chart.version }}"
+    wave: 0
+  tempo:
+    version: "{{ charts.tempo.version }}"
+    wave: 0
+  pyroscope:
+    version: "{{ charts.pyroscope.version }}"
+    wave: 0
+  alloy:
+    version: "{{ charts.alloy.version }}"
+    wave: 1
+    extraPath: k8s/alloy          # Alloy config + import script as files (Kustomize ConfigMap)
+  grafana:
+    version: "{{ charts.grafana.version }}"
+    wave: 1
+    values: {{ lookup('template', 'grafana-values.yaml.j2') | from_yaml | to_json }}
+  demo:
+    path: k8s/demo
+    namespace: demo
+    wave: 2

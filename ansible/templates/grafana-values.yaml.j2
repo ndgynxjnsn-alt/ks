@@ -1,0 +1,49 @@
+# {{ ansible_managed }}
+# Site-specific Grafana values, merged over k8s/values/grafana.yaml by the root app.
+{% set tenant_names = tenants | map(attribute='name') | list %}
+grafana.ini:
+  server:
+    domain: "grafana.{{ domain }}"
+    root_url: "https://grafana.{{ domain }}"   # absolute links; the UI also works on http
+{% if oauth.enabled %}
+  # Login via the IdP. Group -> Grafana org/role:
+  #   grafana-admins -> Admin in every org + Grafana server admin;  tenant-<name> -> Editor in org <name>
+  # auto_assign_org is off, so tenant users don't land in the Main org (which sees all tenants).
+  users:
+    auto_assign_org: false
+  auth.generic_oauth:
+    enabled: true
+    name: Keycloak
+    allow_sign_up: true
+    client_id: "{{ oauth.client_id }}"
+    scopes: openid email profile
+    use_pkce: true
+    auth_url: "{{ oauth.issuer }}/protocol/openid-connect/auth"
+    token_url: "{{ oauth.issuer }}/protocol/openid-connect/token"
+    api_url: "{{ oauth.issuer }}/protocol/openid-connect/userinfo"
+    signout_redirect_url: "{{ oauth.issuer }}/protocol/openid-connect/logout?client_id={{ oauth.client_id
+      }}&post_logout_redirect_uri={{ ('https://grafana.' ~ domain ~ '/login') | urlencode | replace('/', '%2F') }}"
+    login_attribute_path: preferred_username
+    email_attribute_path: email
+    name_attribute_path: name
+    groups_attribute_path: groups
+    role_attribute_path: "contains(groups[*], 'grafana-admins') && 'GrafanaAdmin' || 'Viewer'"
+    allow_assign_grafana_admin: true
+    org_attribute_path: groups
+    org_mapping: "grafana-admins:*:Admin{% for t in tenant_names %} tenant-{{ t }}:{{ t }}:Editor{% endfor %}"
+
+envValueFrom:
+  GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+    secretKeyRef: { name: grafana-oauth, key: client-secret }
+{% if oauth.host_ip is defined %}
+hostAliases:      # no DNS for the IdP (lab)
+  - { ip: "{{ oauth.host_ip }}", hostnames: ["{{ oauth.hostname }}"] }
+{% endif %}
+{% endif %}
+
+# Main org: all tenants (cross-tenant queries); the tenant orgs get theirs through the API (lgtm.yml)
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources: {{ lookup('template', 'grafana-datasources.yaml.j2',
+                           template_vars={'ds_tenants': tenant_names, 'ds_dollar': '$$'}) | from_yaml | to_json }}

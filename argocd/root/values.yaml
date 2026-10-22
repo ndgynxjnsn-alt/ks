@@ -6,6 +6,7 @@ repo:
 # apps.<name>:
 #   chart/version  upstream chart from repo.helm, values from $values/k8s/values/<valuesFile|name>.yaml
 #   path           or: a directory/chart in this repository
+#   extraPath      additional directory (manifests/Kustomize) deployed with an upstream chart
 #   namespace      target namespace (default lgtm)
 #   wave           sync wave of the Application (CRD providers first)
 #   values         extra values (site-specific overlay), passed as helm.valuesObject

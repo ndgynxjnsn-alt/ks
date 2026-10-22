@@ -1,0 +1,10 @@
+# Alloy's configuration as files (Argo CD app "alloy", second source). Fixed name: the Alloy chart references
+# it (configMap.name), and Alloy's config reloader applies changes without restarting the pods.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lgtm
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: alloy-config
+    files: [config.alloy, otlp-json-import.sh]

@@ -40,6 +40,11 @@ spec:
     - repoURL: {{ $.Values.repo.git }}
       targetRevision: {{ $.Values.repo.revision }}
       ref: values
+    {{- with $app.extraPath }}
+    - repoURL: {{ $.Values.repo.git }}             # additional manifests/Kustomize from this repository
+      targetRevision: {{ $.Values.repo.revision }}
+      path: {{ . }}
+    {{- end }}
   {{- end }}
   syncPolicy:
     automated: { prune: true, selfHeal: true }

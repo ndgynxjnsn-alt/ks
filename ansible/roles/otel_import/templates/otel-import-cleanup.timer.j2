@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Delete processed OTLP/JSON import files periodically
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+[Install]
+WantedBy=timers.target

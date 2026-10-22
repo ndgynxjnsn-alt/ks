@@ -4,15 +4,7 @@
   loop: "{{ {'fs.inotify.max_user_instances': 1024, 'fs.inotify.max_user_watches': 1048576} | dict2items }}"
 
 - name: Default route (only when the inventory sets default_gateway)
-  ansible.builtin.copy:
-    dest: /etc/netplan/60-default-route.yaml
-    mode: "0600"
-    content: |
-      network:
-        version: 2
-        ethernets:
-          {{ rke2_iface }}:
-            routes: [{ to: default, via: {{ default_gateway }} }]
+  ansible.builtin.template: { src: 60-default-route.yaml.j2, dest: /etc/netplan/60-default-route.yaml, mode: "0600" }
   when: default_gateway is defined
   notify: Apply netplan
 
@@ -106,10 +98,4 @@
   delay: 5
 
 - name: Shell environment for kubectl/crictl on the node
-  ansible.builtin.copy:
-    dest: /etc/profile.d/rke2.sh
-    mode: "0644"
-    content: |
-      export PATH=$PATH:/var/lib/rancher/rke2/bin
-      export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
-      export CONTAINER_RUNTIME_ENDPOINT=unix:///run/k3s/containerd/containerd.sock
+  ansible.builtin.template: { src: rke2-profile.sh.j2, dest: /etc/profile.d/rke2.sh, mode: "0644" }

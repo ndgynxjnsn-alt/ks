@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# Values of argocd/platform: ingress VIP, ingresses, TLS issuer, Grafana database, dashboards.
+domain: "{{ domain }}"
+ingressVIP: "{{ ingress_vip }}"
+hosts: {{ lgtm_hosts | to_json }}
+traefikSelector: {{ traefik_selector | to_json }}
+tls:
+  issuer: "{{ tls_issuer.name }}"
+  acmeServer: "{{ tls_issuer.acme_server }}"
+  email: "{{ tls_issuer.email }}"
+  eabKeyID: "{{ tls_issuer.eab_kid }}"
+{% if tls_issuer.ca_bundle_file and tls_issuer.ca_bundle_file is file %}
+  caBundle: "{{ lookup('file', tls_issuer.ca_bundle_file) | b64encode }}"
+{% endif %}
+grafanaDB:
+  image: "{{ grafana_db_image }}"
+  instances: 3
+  size: 1Gi
