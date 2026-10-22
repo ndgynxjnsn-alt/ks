@@ -1,25 +1,27 @@
-# ---------------------------------------------------------------- versions (latest as of 2026-10)
+# ---------------------------------------------------------------- versions (latest as of 2026-10-22)
 rke2_version: v1.37.1+rke2r1
-kube_vip_version: v1.2.4
+kube_vip_version: v1.3.1
 local_path_provisioner_version: v0.0.37
 garage_version: v2.4.1
-helm_version: v4.3.0
+helm_version: v4.3.1
 kubectl_version: v1.37.1
 k9s_version: v0.51.0
 
-# Helm charts (downloaded by download.yml into artifacts/charts)
-_grafana_community: https://grafana-community.github.io/helm-charts
-_grafana: https://grafana.github.io/helm-charts
+# Helm charts, pulled by download.yml into artifacts/charts. "oci" is the OCI reference (preferred, listed in
+# artifacts/helm-charts-oci.txt); "repo" is a classic HTTPS repository for charts without OCI publication.
 charts:
-  loki: { repo: "{{ _grafana_community }}", version: 18.15.0 }          # Loki 3.7.8
-  tempo: { repo: "{{ _grafana_community }}", version: 3.1.0 }           # Tempo 3.1.0
-  grafana: { repo: "{{ _grafana_community }}", version: 13.4.0 }        # Grafana 13.2.3
-  pyroscope: { repo: "{{ _grafana }}", version: 2.3.2 }                 # Pyroscope 2.3.2
-  alloy: { repo: "{{ _grafana }}", version: 1.13.1 }                    # Alloy 1.20.1
-  cert-manager: { repo: https://charts.jetstack.io, version: v1.21.2 }
-  cloudnative-pg: { repo: https://cloudnative-pg.github.io/charts, version: 0.29.1 }  # operator 1.30.1
-  argo-cd: { repo: https://argoproj.github.io/argo-helm, version: 10.10.5 }         # Argo CD 3.5.5
-  kube-state-metrics: { repo: https://prometheus-community.github.io/helm-charts, version: 8.6.0 }  # 2.20.0
+  loki: { oci: oci://ghcr.io/grafana-community/helm-charts/loki, version: 19.0.3 }        # Loki 3.7.9
+  tempo: { oci: oci://ghcr.io/grafana-community/helm-charts/tempo, version: 3.2.1 }       # Tempo 3.1.1
+  grafana: { oci: oci://ghcr.io/grafana-community/helm-charts/grafana, version: 14.0.1 }  # Grafana 13.2.4
+  pyroscope: { oci: oci://ghcr.io/grafana/helm-charts/pyroscope, version: 2.4.1 }         # Pyroscope 2.4.1
+  # Alloy's chart is only released to the HTTPS repository (no OCI artifact as of 1.14.2)
+  alloy: { repo: https://grafana.github.io/helm-charts, version: 1.14.2 }                 # Alloy 1.21.1
+  cert-manager: { oci: oci://quay.io/jetstack/charts/cert-manager, version: v1.21.2 }
+  cloudnative-pg: { oci: oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg, version: 0.29.1 }  # operator 1.30.1
+  argo-cd: { oci: oci://ghcr.io/argoproj/argo-helm/argo-cd, version: 10.10.5 }           # Argo CD 3.5.5
+  kube-state-metrics:                                                                     # 2.20.0
+    oci: oci://ghcr.io/prometheus-community/charts/kube-state-metrics
+    version: 8.6.0
 # Mimir monolithic chart from the NGDATA fork (branch release-6.0.6-1-lily), pinned; packaged by download.yml.
 mimir_chart:
   repo: https://github.com/NGDATA/mimir.git
@@ -27,13 +29,13 @@ mimir_chart:
   version: 6.0.6
 
 # Grafana image with the Drilldown apps baked in (no plugin downloads at runtime).
-grafana_base_image: grafana/grafana:13.2.3
-grafana_image: lgtm.local/grafana:13.2.3-drilldown
+grafana_base_image: grafana/grafana:13.2.4
+grafana_image: lgtm.local/grafana:13.2.4-drilldown
 grafana_plugins:
   - { id: grafana-metricsdrilldown-app, version: 3.0.0 }
   - { id: grafana-lokiexplore-app, version: 3.0.0 }
-  - { id: grafana-exploretraces-app, version: 2.2.1 }
-  - { id: grafana-pyroscope-app, version: 2.3.1 }
+  - { id: grafana-exploretraces-app, version: 3.0.0 }
+  - { id: grafana-pyroscope-app, version: 3.0.0 }
 
 # PostgreSQL for Grafana (CloudNativePG cluster "grafana-db", 3 instances)
 grafana_db_image: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie

@@ -63,14 +63,43 @@
           strip: 0
 
     # ------------------------------------------------------------ charts
-    - name: Download Helm charts
+    - name: Download Helm charts (OCI where published, else the HTTPS repository)
       ansible.builtin.command:
         cmd: >-
-          {{ artifacts_dir }}/bin/helm pull {{ item.key }} --repo {{ item.value.repo }}
+          {{ artifacts_dir }}/bin/helm pull
+          {{ item.value.oci if item.value.oci is defined else item.key ~ ' --repo ' ~ item.value.repo }}
           --version {{ item.value.version }} -d {{ artifacts_dir }}/charts
         creates: "{{ artifacts_dir }}/charts/{{ item.key }}-{{ item.value.version }}.tgz"
       loop: "{{ charts | dict2items }}"
       loop_control: { label: "{{ item.key }}" }
+
+    - name: Remove chart archives of other versions
+      ansible.builtin.file: { path: "{{ artifacts_dir }}/charts/{{ item }}", state: absent }
+      loop: "{{ query('fileglob', artifacts_dir + '/charts/*.tgz') | map('basename') | reject('in', wanted) | list }}"
+      vars:
+        wanted: >-
+          {{ (charts | dict2items | map(attribute='key')
+              | zip(charts | dict2items | map(attribute='value.version')) | map('join', '-')
+              | map('regex_replace', '$', '.tgz') | list)
+             + ['mimir-distributed-' ~ mimir_chart.version ~ '.tgz'] }}
+
+    - name: Manifest digests of the OCI charts
+      ansible.builtin.command: >-
+        {{ artifacts_dir }}/bin/crane digest {{ item.value.oci | regex_replace('^oci://', '') }}:{{ item.value.version }}
+      loop: "{{ charts | dict2items | selectattr('value.oci', 'defined') }}"
+      loop_control: { label: "{{ item.key }}" }
+      register: chart_digests
+      changed_when: false
+
+    - name: List of chart sources for compliance (artifacts/helm-charts-oci.txt)
+      ansible.builtin.template:
+        src: templates/helm-charts-oci.txt.j2
+        dest: "{{ artifacts_dir }}/helm-charts-oci.txt"
+        mode: "0644"
+      vars:
+        digests: >-
+          {{ dict(chart_digests.results | map(attribute='item.key')
+                  | zip(chart_digests.results | map(attribute='stdout'))) }}
 
     - name: Package the NGDATA Mimir chart
       ansible.builtin.shell:

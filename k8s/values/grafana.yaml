@@ -5,7 +5,7 @@ fullnameOverride: grafana
 image:
   registry: lgtm.local
   repository: grafana
-  tag: 13.2.3-drilldown
+  tag: 13.2.4-drilldown
   pullPolicy: Never
 replicas: 2
 headlessService: true    # peer discovery for unified alerting HA (ha_peers below)

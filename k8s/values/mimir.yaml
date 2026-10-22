@@ -4,7 +4,7 @@ deploymentMode: monolithic
 fullnameOverride: mimir
 
 image:
-  tag: 3.2.2
+  tag: 3.2.3
 
 monolithic:
   replicas: 3
