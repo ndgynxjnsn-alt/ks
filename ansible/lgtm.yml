@@ -83,7 +83,7 @@
       ansible.builtin.debug:
         msg:
           waiting_for: "{{ waited_apps }}"
-          not_waited_for: "{{ root_values.apps.keys() | reject('in', waited_apps) | list }} (wait: false)"
+          not_waited_for (wait false): "{{ root_values.apps.keys() | reject('in', waited_apps) | list }}"
 
     - name: Wait until Argo CD reports these Applications synced and healthy (max. 30 minutes)
       ansible.builtin.command: "{{ kubectl }} -n argocd get applications.argoproj.io -o json"
