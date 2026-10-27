@@ -280,6 +280,13 @@ prometheus.scrape "garage" {
   forward_to   = [prometheus.relabel.node.receiver]
 }
 
+// Scraping https targets: trust the CA bundle from certs/ (trust-manager), which Alloy re-reads when it changes:
+//   prometheus.scrape "example" {
+//     scheme     = "https"
+//     tls_config { ca_file = "/etc/ssl/company/ca-certificates.crt" }
+//     ...
+//   }
+
 // metrics ports of the platform components running on this node (namespace;port)
 discovery.relabel "component_pods" {
   targets = discovery.kubernetes.pods.targets

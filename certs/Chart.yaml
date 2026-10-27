@@ -1,0 +1,5 @@
+apiVersion: v2
+name: lgtm-certs
+description: Additional trusted CA certificates (*.pem / *.crt in this folder), distributed to all namespaces by trust-manager
+type: application
+version: 1.0.0

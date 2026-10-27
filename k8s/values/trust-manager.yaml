@@ -1,0 +1,10 @@
+# trust-manager: builds the CA bundle ConfigMap "company-ca-bundle" (key ca-certificates.crt) in every namespace
+# from the certificates in certs/ plus Debian's public CAs (Bundle in certs/templates/bundle.yaml).
+crds:
+  enabled: true
+app:
+  trust:
+    namespace: cert-manager      # where the source ConfigMap company-ca-certs lives
+resources:
+  requests: { cpu: 20m, memory: 64Mi }
+  limits: { memory: 256Mi }

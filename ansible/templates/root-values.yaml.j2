@@ -1,6 +1,7 @@
 # {{ ansible_managed }}
 # Values of the root app (argocd/root): one Argo CD Application per entry in "apps".
-# Sync waves: CRD providers (-3) -> platform resources (-2) -> backends (0) -> Alloy, Grafana (1) -> demo (2)
+# Sync waves: CRD providers (-3) -> platform resources, trust-manager (-2) -> trusted CAs (-1)
+#             -> backends (0) -> Alloy, Grafana (1) -> demo (2)
 repo:
   git: "{{ gitops.repo_url }}"
   revision: "{{ gitops.revision }}"
@@ -19,6 +20,14 @@ apps:
     version: "{{ charts['cloudnative-pg'].version }}"
     namespace: cnpg-system
     wave: -3
+  trust-manager:                  # distributes certs/ (+ public CAs) as ConfigMap company-ca-bundle
+    version: "{{ charts['trust-manager'].version }}"
+    namespace: cert-manager
+    wave: -2
+  certs:                          # the certs/ folder: trusted CA certificates -> Bundle company-ca-bundle
+    path: certs
+    namespace: cert-manager
+    wave: -1
   platform:
     path: argocd/platform
     wave: -2

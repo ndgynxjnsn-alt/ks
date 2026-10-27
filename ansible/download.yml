@@ -134,6 +134,8 @@
             $helm template alloy $c/alloy-{{ charts.alloy.version }}.tgz -f $v/alloy.yaml
             $helm template grafana $c/grafana-{{ charts.grafana.version }}.tgz -f $v/grafana.yaml
             $helm template cert-manager $c/cert-manager-{{ charts['cert-manager'].version }}.tgz -f $v/cert-manager.yaml
+            $helm template trust-manager $c/trust-manager-{{ charts['trust-manager'].version }}.tgz \
+              -f $v/trust-manager.yaml
             $helm template cnpg $c/cloudnative-pg-{{ charts['cloudnative-pg'].version }}.tgz -f $v/cloudnative-pg.yaml
             $helm template argocd $c/argo-cd-{{ charts['argo-cd'].version }}.tgz -f $v/argocd.yaml
             $helm template ksm $c/kube-state-metrics-{{ charts['kube-state-metrics'].version }}.tgz \

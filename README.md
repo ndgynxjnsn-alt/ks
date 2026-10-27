@@ -63,6 +63,7 @@ ansible/                          the playbooks - identical for the lab and a re
 argocd/
   root/                           app of apps: one Argo CD Application per component
   platform/                       ingress VIP, ingresses, TLS, Grafana database, dashboards
+certs/                            trusted CA certificates (*.pem, *.crt) -> trust-manager -> every namespace
 k8s/values/                       Helm values of every chart (no secrets)
 k8s/alloy/                        Alloy pipeline (config.alloy) and the OTLP/JSON import script
 k8s/argocd/                       Argo CD resource health check (Lua)
@@ -162,7 +163,8 @@ Requirements on the servers:
    | Wave | Apps |
    |---|---|
    | −3 | cert-manager, CloudNativePG (CRDs) |
-   | −2 | `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster, dashboards |
+   | −2 | trust-manager; `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster, dashboards |
+   | −1 | `certs`: the CA bundle from `certs/` |
    | 0 | Loki, Mimir, Tempo, Pyroscope, kube-state-metrics |
    | 1 | Alloy, Grafana |
    | 2 | demo |
@@ -170,7 +172,13 @@ Requirements on the servers:
    Applications sync automatically with prune and self-heal. Argo CD's health check for `Application`
    (`k8s/values/argocd.yaml`) lets each wave wait for the previous one.
 5. Waits until every Application is synced and healthy, except apps marked `wait: false` (the demo: its image
-   arrives with `demo.yml` afterwards). Then it creates the Grafana org per tenant through the API.
+   arrives with `demo.yml` afterwards). It first prints which apps it waits for and which not, then the
+   sync/health state of every app (with Argo CD's message for those that aren't `Synced/Healthy`). After 30
+   minutes it fails and names the apps that didn't get ready:
+   ```
+   Not synced and healthy after 30 minutes: mimir (Synced/Progressing: Waiting for rollout to finish ...)
+   ```
+   Then it creates the Grafana org per tenant through the API.
 
 To change something, edit, commit and run `lgtm.yml` again, or just push when Argo CD reads your Git server.
 Clusters set up by earlier versions with plain Helm migrate in place: the Helm release records are deleted and
@@ -185,6 +193,27 @@ All playbooks can be re-run, and a re-run applies new settings:
   Partial runs: `--tags images` ships new images, `--tags otel-import` updates the import directories.
 * `demo.yml` loads the image and restarts the pods only when the image ID changed.
 * Exception: `site.yml` **resets Garage** on every run.
+
+## Trusted CA certificates (`certs/`)
+
+Put PEM files of the CAs the cluster should trust (company root and intermediate CAs) into `certs/` as `*.pem`
+or `*.crt`, commit and push. The folder is a small Helm chart, deployed by the Argo CD app `certs`:
+* its certificates go into the ConfigMap `cert-manager/company-ca-certs`;
+* a trust-manager `Bundle` combines them with the public CAs (Debian's `ca-certificates`) and writes the
+  ConfigMap **`company-ca-bundle`**, key `ca-certificates.crt`, into **every namespace**, and updates it when the
+  folder changes. Pods that mount it see the new file after about a minute, without a restart.
+
+Who uses it:
+* **Argo CD repo-server** (`k8s/values/argocd.yaml`): `SSL_CERT_FILE` and `GIT_SSL_CAINFO` point to the bundle,
+  so `git` and Helm trust https Git and Helm repositories signed by a company CA. Argo CD deploys trust-manager
+  itself, so `lgtm.yml` creates a first `argocd/company-ca-bundle` from the Ansible host's CA bundle plus `certs/`
+  when it doesn't exist yet; trust-manager takes it over afterwards.
+* **Alloy** (`k8s/values/alloy.yaml`): mounted at `/etc/ssl/company/`. Scrape https targets with
+  `tls_config { ca_file = "/etc/ssl/company/ca-certificates.crt" }` (example in `k8s/alloy/config.alloy`).
+* Any other pod: mount the ConfigMap `company-ca-bundle` (`optional: true`) as a directory, not with `subPath`
+  (`subPath` mounts don't receive updates).
+
+Only public certificates belong there, never private keys.
 
 ## Networking and TLS
 

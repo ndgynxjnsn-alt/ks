@@ -13,3 +13,4 @@ ignore: |
   .bin/
   lab/external/.generated/
   argocd/*/templates/
+  certs/templates/

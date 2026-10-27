@@ -1,0 +1,32 @@
+{{- /* The CA certificates of this folder (*.pem, *.crt) as a ConfigMap in trust-manager's trust namespace, and
+       a Bundle that combines them with the public CAs into ConfigMap company-ca-bundle in every namespace. */ -}}
+{{- $certs := .Files.Glob "*.{pem,crt}" }}
+{{- if $certs }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: company-ca-certs
+  namespace: cert-manager          # trust-manager's trust namespace
+data:
+  {{- range $path, $_ := $certs }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | trim | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: company-ca-bundle
+spec:
+  sources:
+    - useDefaultCAs: true          # Debian ca-certificates (trust-manager's default package)
+    {{- if $certs }}
+    - configMap:
+        name: company-ca-certs
+        includeAllKeys: true
+    {{- end }}
+  target:
+    configMap:
+      key: ca-certificates.crt
+    namespaceSelector: {}          # every namespace

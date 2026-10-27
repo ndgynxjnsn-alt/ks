@@ -17,6 +17,7 @@ charts:
   # Alloy's chart is only released to the HTTPS repository (no OCI artifact as of 1.14.2)
   alloy: { repo: https://grafana.github.io/helm-charts, version: 1.14.2 }                 # Alloy 1.21.1
   cert-manager: { oci: oci://quay.io/jetstack/charts/cert-manager, version: v1.21.2 }
+  trust-manager: { oci: oci://quay.io/jetstack/charts/trust-manager, version: v0.26.0 }
   cloudnative-pg: { oci: oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg, version: 0.29.1 }  # operator 1.30.1
   argo-cd: { oci: oci://ghcr.io/argoproj/argo-helm/argo-cd, version: 10.10.5 }           # Argo CD 3.5.5
   kube-state-metrics:                                                                     # 2.20.0

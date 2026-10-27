@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# First CA bundle for the Argo CD repo-server: Argo CD deploys trust-manager from Git, so it must trust the
+# Git/Helm server before trust-manager exists. Only created when missing; trust-manager then takes the
+# ConfigMap over (server-side apply with force) and keeps it in sync with certs/.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: company-ca-bundle
+  namespace: argocd
+data:
+  ca-certificates.crt: |
+{% for file in ca_files %}
+    {{ lookup('file', file) | trim | indent(4) }}
+{% endfor %}

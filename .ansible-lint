@@ -5,5 +5,6 @@ exclude_paths:
   - .bin/
   - lab/external/.generated/
   - argocd/          # Helm charts (Go templates), not Ansible
+  - certs/           # Helm chart
   - k8s/             # Helm values / Kubernetes manifests
   - apps/

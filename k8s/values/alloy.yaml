@@ -12,6 +12,8 @@ alloy:
       - { name: host-root, mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer }
       - { name: host-proc, mountPath: /host/proc, readOnly: true }
       - { name: host-sys, mountPath: /host/sys, readOnly: true }
+      # trusted CAs (certs/ + public CAs, trust-manager): tls_config { ca_file = "/etc/ssl/company/ca-certificates.crt" }
+      - { name: company-ca, mountPath: /etc/ssl/company, readOnly: true }
   extraEnv:
     - name: NODE_IP                          # etcd and Garage metrics are scraped on the node's address
       valueFrom: { fieldRef: { fieldPath: status.hostIP } }
@@ -44,6 +46,7 @@ controller:
       - { name: host-proc, hostPath: { path: /proc } }
       - { name: host-sys, hostPath: { path: /sys } }
       - { name: alloy-config, configMap: { name: alloy-config } }
+      - { name: company-ca, configMap: { name: company-ca-bundle, optional: true } }
   # Imports OTLP/JSON files (one export request per line, as written by the OTel Collector's file exporter,
   # or a single pretty-printed request) into Alloy's "import" receiver. A file is picked up once it hasn't
   # changed for a minute (scp finished), renamed to *.imported (or *.failed), and deleted later by the

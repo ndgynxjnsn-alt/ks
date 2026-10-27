@@ -11,6 +11,25 @@
     # values of the root app, incl. the platform and Grafana overlays (ansible/templates/*-values.yaml.j2)
     root_values: "{{ lookup('template', 'templates/root-values.yaml.j2') | from_yaml }}"
 
+    # Ansible waits for the root app and every app not marked "wait: false" (those are only reported)
+    waited_apps: >-
+      {{ ['lgtm'] + (root_values.apps | dict2items | rejectattr('value.wait', 'defined') | map(attribute='key') | list)
+         + (root_values.apps | dict2items | selectattr('value.wait', 'defined') | selectattr('value.wait')
+            | map(attribute='key') | list) }}
+    # "Sync/Health: message" per Application, from the last "kubectl get applications" (argo_apps)
+    app_states: >-
+      {%- set states = {} -%}
+      {%- for a in ((argo_apps.stdout | default('', true) or '{"items": []}') | from_json)['items'] -%}
+      {%-   set state = a.status.sync.status | default('?') ~ '/' ~ a.status.health.status | default('?') -%}
+      {%-   set msg = a.status.health.message | default(a.status.operationState.message | default(
+             (a.status.conditions | default([{}]))[0].message | default(''))) -%}
+      {%-   set _ = states.update({a.metadata.name: state
+             ~ ((': ' ~ msg) if msg and state != 'Synced/Healthy' else '')}) -%}
+      {%- endfor -%}{{ states }}
+    not_ready: >-
+      {{ waited_apps | reject('in', app_states | dict2items | selectattr('value', 'match', 'Synced/Healthy')
+         | map(attribute='key') | list) | list }}
+
   tasks:
     - name: Secrets (namespaces, S3, Grafana admin + OAuth, EAB, repository credentials)
       ansible.builtin.include_tasks: tasks/apply-set.yml
@@ -18,6 +37,18 @@
         set_name: secrets
         set_kinds: [secrets]
         manifest: "{{ lookup('template', 'templates/secrets.yaml.j2') }}"
+
+    - name: First CA bundle for Argo CD (system CAs + certs/; trust-manager takes it over)
+      ansible.builtin.command:
+        cmd: "{{ kubectl }} create -f -"
+        stdin: "{{ lookup('template', 'templates/ca-bundle-bootstrap.yaml.j2') }}"
+      vars:
+        ca_files: >-
+          {{ [lookup('first_found', ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt'])]
+             + query('fileglob', repo_dir ~ '/certs/*.pem', repo_dir ~ '/certs/*.crt') }}
+      register: ca_bootstrap
+      changed_when: ca_bootstrap.rc == 0
+      failed_when: ca_bootstrap.rc != 0 and 'AlreadyExists' not in ca_bootstrap.stderr
 
     - name: Publish repository and charts
       ansible.builtin.include_tasks: tasks/gitops-publish.yml
@@ -48,28 +79,34 @@
         set_kinds: [applications.argoproj.io]
         manifest: "{{ lookup('template', 'templates/root-app.yaml.j2') }}"
 
-    - name: Wait until Argo CD reports every Application synced and healthy
+    - name: Applications to wait for
+      ansible.builtin.debug:
+        msg:
+          waiting_for: "{{ waited_apps }}"
+          not_waited_for: "{{ root_values.apps.keys() | reject('in', waited_apps) | list }} (wait: false)"
+
+    - name: Wait until Argo CD reports these Applications synced and healthy (max. 30 minutes)
       ansible.builtin.command: "{{ kubectl }} -n argocd get applications.argoproj.io -o json"
       register: argo_apps
       changed_when: false
-      vars:
-        # the root app plus every app that isn't marked wait: false
-        app_list: "{{ root_values.apps | dict2items }}"
-        waited: >-
-          {{ ['lgtm'] + (app_list | selectattr('value.wait', 'undefined') | map(attribute='key') | list)
-             + (app_list | selectattr('value.wait', 'defined') | selectattr('value.wait')
-                | map(attribute='key') | list) }}
-        app_items: >-
-          {{ (argo_apps.stdout | from_json)['items'] | selectattr('metadata.name', 'in', waited) | list }}
-        healthy: >-
-          {{ app_items | selectattr('status.health.status', 'defined')
-             | selectattr('status.health.status', 'equalto', 'Healthy')
-             | selectattr('status.sync.status', 'equalto', 'Synced') | list }}
-      until: >-
-        argo_apps.rc == 0 and app_items | length == waited | length
-        and healthy | length == app_items | length
+      failed_when: false                  # a timeout is reported by the next two tasks
+      until: argo_apps.rc == 0 and not_ready | length == 0
       retries: 90
       delay: 20
+
+    - name: Argo CD Applications (sync/health)
+      ansible.builtin.debug:
+        msg:
+          waited_for: "{{ app_states | dict2items | selectattr('key', 'in', waited_apps) | items2dict }}"
+          not_waited_for: "{{ app_states | dict2items | rejectattr('key', 'in', waited_apps) | items2dict }}"
+
+    - name: Fail if an Application is not ready
+      ansible.builtin.fail:
+        msg: >-
+          Not synced and healthy after 30 minutes:
+          {% for app in not_ready %}{{ app }} ({{ app_states[app] | default('no such Application') }})
+          {{- ', ' if not loop.last }}{% endfor %}
+      when: not_ready | length > 0
 
     - name: Grafana Main org (cross-tenant, for admins)
       ansible.builtin.include_tasks: tasks/grafana-main-org.yml
