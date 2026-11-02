@@ -3,6 +3,7 @@ rke2_version: v1.37.1+rke2r1
 kube_vip_version: v1.3.1
 local_path_provisioner_version: v0.0.37
 garage_version: v2.4.1
+gitea_version: 1.27.3
 helm_version: v4.3.1
 kubectl_version: v1.37.1
 k9s_version: v0.51.0

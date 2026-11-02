@@ -1,0 +1,40 @@
+# Runs on the Ansible host: Gitea with docker compose (ansible/gitea/docker-compose.yml), the source of truth for
+# the Argo CD app of apps. lgtm.yml pushes the committed HEAD and the charts to it (gitops.publish).
+#   ansible-playbook -i <inventory> ansible/gitea.yml   (add -e docker_sudo=true -K without docker group)
+- name: Gitea on the Ansible host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    compose_dir: "{{ playbook_dir }}/gitea"
+  tasks:
+    - name: Start Gitea
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_dir }}"
+      environment: &gitea_env
+        GITEA_VERSION: "{{ gitea_version }}"
+        GITEA_ROOT_URL: "{{ gitea_url }}/"
+      become: "{{ docker_sudo | default(false) }}"
+      register: compose
+      changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
+
+    - name: Wait for Gitea
+      ansible.builtin.uri: { url: "http://127.0.0.1:3000/api/healthz" }
+      register: gitea_health
+      until: gitea_health.status == 200
+      retries: 30
+      delay: 5
+
+    - name: Gitea user owning the repository and the Helm charts
+      ansible.builtin.command:
+        argv: [docker, compose, exec, -T, gitea, gitea, admin, user, create, --admin, --username,
+               "{{ gitops.publish.username }}", --password, "{{ gitops.publish.password }}",
+               --email, "{{ gitops.publish.username }}@example.corp", --must-change-password=false]
+        chdir: "{{ compose_dir }}"
+      environment: *gitea_env
+      become: "{{ docker_sudo | default(false) }}"
+      register: gitea_user
+      changed_when: gitea_user.rc == 0
+      failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
+      no_log: true

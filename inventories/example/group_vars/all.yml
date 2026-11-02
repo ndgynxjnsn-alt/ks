@@ -8,16 +8,19 @@ domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
 lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
-# The cluster must reach both: this repository (e.g. a GitLab mirror) and a Helm repository holding
-# artifacts/charts (e.g. Harbor/Nexus; push them with CI or `helm push`).
+# Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts), both on Gitea on the
+# Ansible host (ansible/gitea.yml); lgtm.yml pushes the committed HEAD and uploads the charts (gitops.publish).
+# Plain http with anonymous read: keep port 3000 reachable from the servers only. The repository holds no secrets.
+gitea_url: http://10.0.10.5:3000   # address of the Ansible host as seen from the servers
 gitops:
-  repo_url: https://gitlab.company.org/observability/lgtm.git
+  repo_url: "{{ gitea_url }}/lgtm/lgtm.git"
   revision: main
-  helm_repo_url: https://harbor.company.org/chartrepo/lgtm
-  repo_username: argocd                               # optional: read access for Argo CD
-  repo_password: "{{ vault_gitlab_token }}"
-  # helm_username / helm_password: optional
-  # publish: {...}                                    # optional: let lgtm.yml push (see lab inventory)
+  helm_repo_url: "{{ gitea_url }}/api/packages/lgtm/helm"
+  publish:
+    git_push_url: "{{ gitea_url }}/lgtm/lgtm.git"
+    helm_upload_url: "{{ gitea_url }}/api/packages/lgtm/helm/api/charts"
+    username: lgtm
+    password: "{{ lookup('password', secrets_dir + '/gitea_password chars=ascii_letters,digits length=20') }}"
 
 # ---------------------------------------------------------------- tenants
 tenants:

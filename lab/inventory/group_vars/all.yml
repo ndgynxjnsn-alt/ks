@@ -14,15 +14,16 @@ domain: lgtm.company.org
 lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
-# Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts). Lab: both on
-# Gitea from lab/external; lgtm.yml pushes the committed HEAD and uploads the charts (gitops.publish).
+# Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts), both on Gitea on the
+# Ansible host (ansible/gitea.yml); lgtm.yml pushes the committed HEAD and uploads the charts (gitops.publish).
+gitea_url: "http://{{ external_host_ip }}:3000"
 gitops:
-  repo_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
+  repo_url: "{{ gitea_url }}/lgtm/lgtm.git"
   revision: main
-  helm_repo_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm"
+  helm_repo_url: "{{ gitea_url }}/api/packages/lgtm/helm"
   publish:
-    git_push_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
-    helm_upload_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm/api/charts"
+    git_push_url: "{{ gitea_url }}/lgtm/lgtm.git"
+    helm_upload_url: "{{ gitea_url }}/api/packages/lgtm/helm/api/charts"
     username: lgtm
     password: "{{ lookup('password', secrets_dir + '/gitea_password chars=ascii_letters,digits length=20') }}"
 
@@ -46,7 +47,6 @@ tenants:
 external_host_ip: 192.168.56.1     # the Ansible host on the lab network, reachable from the nodes
 keycloak_version: 26.8.1
 pebble_version: 2.10.1
-gitea_version: 1.27.3
 bind_version: "9.20"
 
 # ---------------------------------------------------------------- TLS

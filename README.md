@@ -52,6 +52,7 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 
 ```
 ansible/                          the playbooks - identical for the lab and a real site
+  gitea.yml, gitea/               Gitea on the Ansible host (docker compose): Git + Helm repository for Argo CD
   site.yml                        servers: sudo, Garage, OTLP/JSON import dirs, RKE2 (tarball) + kube-vip, kubeconfig
   lgtm.yml                        Secrets, publish repo + charts, Argo CD, root Application, Grafana tenant orgs
   demo.yml                        build the demo image, load it on the servers
@@ -73,7 +74,7 @@ inventories/example/              template for a real site (all site settings)
 lab/                              LAB ONLY
   Vagrantfile                     3 Ubuntu 26.04 VMs, 5 data disks each, isolated networks
   inventory/                      lab servers + lab site settings
-  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea
+  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND
   templates/                      their configuration (Keycloak realm, Pebble, BIND, keycloak.env)
 docs/s3-storage.md                S3 storage research and decision (Garage)
 ```
@@ -92,7 +93,8 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 ansible-playbook ansible/download.yml                        # online: everything into artifacts/ (~3 GB)
 (cd lab && vagrant destroy -f)                               # optional: start from scratch
 (cd lab && vagrant up)                                       # 3 bare VMs on isolated networks
-ansible-playbook -i lab/inventory lab/external.yml -K        # Keycloak, Pebble (CA), BIND (DNS), Gitea (Git+Helm)
+ansible-playbook -i lab/inventory lab/external.yml -K        # Keycloak, Pebble (CA), BIND (DNS)
+ansible-playbook -i lab/inventory ansible/gitea.yml          # Gitea (Git+Helm) on this machine, for Argo CD
 ansible-playbook -i lab/inventory ansible/site.yml           # offline: Garage, RKE2 HA + kube-vip, ./kubeconfig
 ansible-playbook -i lab/inventory ansible/lgtm.yml           # Argo CD + app of apps -> the whole stack
 ansible-playbook -i lab/inventory ansible/demo.yml           # demo image -> servers (Argo CD deploys the app)
@@ -136,9 +138,11 @@ Copy `inventories/example` to `inventories/<site>`, then fill in:
 * the domain;
 * the company CA (ACME URL and EAB credentials);
 * the IdP;
-* the Git and Helm repositories Argo CD reads from.
+* `gitea_url`: the Ansible host's address as the servers see it.
 
-Keep secrets in ansible-vault. Then run `download.yml`, `site.yml` and `lgtm.yml` with `-i inventories/<site>`.
+Keep secrets in ansible-vault. Then run `download.yml`, `gitea.yml`, `site.yml` and `lgtm.yml` with `-i inventories/<site>`.
+
+Requirements on the Ansible host: Docker with compose, and port 3000 reachable from the servers.
 
 Requirements on the servers:
 * Ubuntu 26.04.
@@ -152,8 +156,9 @@ Requirements on the servers:
 1. Creates all **Secrets** (`ansible/templates/secrets.yaml.j2`): S3 keys, Grafana admin and OAuth client,
    ACME EAB key, Garage metrics token, and repository credentials. The values in Git only reference
    them. Loki, Mimir, Tempo and Pyroscope read the S3 keys from environment variables (`-config.expand-env`).
-2. **Publishes** (lab, `gitops.publish`): pushes the committed `HEAD` to Gitea and uploads `artifacts/charts/*.tgz`
-   to Gitea's Helm repository. At a company, CI does this.
+2. **Publishes** (`gitops.publish`): pushes the committed `HEAD` to the `main` branch of Gitea and uploads
+   `artifacts/charts/*.tgz` to Gitea's Helm repository. Gitea (`ansible/gitea.yml`) runs on the Ansible host and is
+   the source of truth for the app of apps; it is not part of the cluster or of the Argo CD deployment.
    **Argo CD deploys what is committed**, and the playbook warns about uncommitted changes.
 3. Installs **Argo CD** with Helm (the only Helm install).
 4. Creates the root Application `lgtm`. It renders `argocd/root` with the site values from the inventory into one

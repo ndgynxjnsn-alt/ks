@@ -1,7 +1,6 @@
 # LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
 #   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
 #   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
-#   Gitea    - Git + Helm repository for Argo CD
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
 #   ansible-playbook -i lab/inventory lab/external.yml   (add -e lab_docker_sudo=true -K without docker group)
 - name: External services (Keycloak, Pebble)
@@ -67,30 +66,11 @@
 
     - name: Start the containers
       ansible.builtin.command:
-        cmd: docker compose up -d
+        cmd: docker compose up -d --remove-orphans
         chdir: "{{ repo_dir }}/lab/external"
       become: "{{ lab_docker_sudo | default(false) }}"
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
-
-    - name: Wait for Gitea
-      ansible.builtin.uri: { url: "http://127.0.0.1:3000/api/healthz" }
-      register: gitea_health
-      until: gitea_health.status == 200
-      retries: 30
-      delay: 5
-
-    - name: Gitea user owning the repository and the Helm charts
-      ansible.builtin.command:
-        argv: [docker, compose, exec, -T, gitea, gitea, admin, user, create, --admin, --username,
-               "{{ gitops.publish.username }}", --password, "{{ gitops.publish.password }}",
-               --email, "{{ gitops.publish.username }}@example.corp", --must-change-password=false]
-        chdir: "{{ repo_dir }}/lab/external"
-      become: "{{ lab_docker_sudo | default(false) }}"
-      register: gitea_user
-      changed_when: gitea_user.rc == 0
-      failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
-      no_log: true
 
     - name: Next steps
       vars:
@@ -103,7 +83,7 @@
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }}"
           - "  passwords: .secrets/keycloak_user_<name>"
-          - "Then: ansible-playbook -i lab/inventory ansible/lgtm.yml"
+          - "Then: ansible-playbook -i lab/inventory ansible/gitea.yml, then site.yml and lgtm.yml"
 
   # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
   handlers:

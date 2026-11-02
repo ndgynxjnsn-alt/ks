@@ -1,0 +1,24 @@
+# Gitea on the Ansible host: the Git and Helm repository Argo CD deploys from. Deliberately outside the cluster
+# and outside Argo CD, which needs it to start. Started by ansible/gitea.yml, which sets GITEA_VERSION and
+# GITEA_ROOT_URL.
+name: lgtm-gitea
+
+services:
+  gitea:
+    image: gitea/gitea:${GITEA_VERSION:?}-rootless
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"                       # no web installer
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:?}
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__repository__ENABLE_PUSH_CREATE_USER: "true"          # first push creates the repo
+      GITEA__repository__DEFAULT_PUSH_CREATE_PRIVATE: "false"     # Argo CD reads anonymously
+      GITEA__packages__ENABLED: "true"                            # Helm repository /api/packages/<user>/helm
+    ports: ["3000:3000"]
+    volumes:
+      - gitea-data:/var/lib/gitea
+      - gitea-config:/etc/gitea
+    restart: unless-stopped
+
+volumes:
+  gitea-data:
+  gitea-config:
