@@ -18,12 +18,14 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
              DNS: *.lgtm.company.org -> ingress VIP                     Kubernetes API -> control-plane VIP
                           │                                                         │
    ┌───── kube-vip (ARP): two floating IPs, each moves to a surviving server ───────┴────────────────┐
-   │  ingress VIP  :80/:443  Traefik -> grafana|loki|tempo|mimir|pyroscope|alloy|garage|argocd.<domain> │
+   │  ingress VIP  :80/:443  Traefik -> grafana|loki|tempo|mimir|pyroscope|alloy|faro|garage|argocd|headlamp.<domain> │
+   │               :5432     Grafana's PostgreSQL (TCP passthrough)                                                 │
    │  control-plane VIP  :6443 API, :9345 RKE2 join                                                     │
    ▼                                   ▼                                   ▼
  server 1                           server 2                           server 3
  RKE2 server (etcd, CP, worker)     RKE2 server (etcd, CP, worker)     RKE2 server (etcd, CP, worker)
  Garage S3 (data disks)             Garage S3 (data disks)             Garage S3 (data disks)
+ TopoLVM VG (1 disk)                TopoLVM VG (1 disk)                TopoLVM VG (1 disk)
 
  argocd:  Argo CD  ── app of apps (argocd/root) ──▶ everything below
  lgtm:    loki ×3 · mimir ×3 · pyroscope ×3 · tempo ×1 · alloy (DaemonSet) · grafana ×2 · postgres ×3 (CloudNativePG)
@@ -46,6 +48,8 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 | Grafana | 13.2.4 (chart 14.0.1) | 2 replicas on PostgreSQL, one org per tenant, OAuth; Drilldown apps baked into the image |
 | CloudNativePG | operator 1.30.1, PostgreSQL 18.6 | Grafana's database, 3 instances, automatic failover |
 | kube-state-metrics | 2.20.0 (chart 8.6.0) | object state for the "Cluster health" dashboard |
+| TopoLVM | 0.42.0 (chart 17.3.0) | local PersistentVolumes from an LVM volume group per server; default StorageClass |
+| Headlamp | 0.46.0 (chart 0.46.0) | Kubernetes web UI |
 | OS | Ubuntu 26.04 LTS | `sudo-rs` replaced by classic sudo (Ansible's become can't drive sudo-rs) |
 
 ## Repository layout
@@ -96,6 +100,7 @@ ansible-playbook -i lab/inventory lab/external.yml -K        # Keycloak, Pebble 
 ansible-playbook -i lab/inventory ansible/site.yml           # offline: Garage, RKE2 HA + kube-vip, ./kubeconfig
 ansible-playbook -i lab/inventory ansible/lgtm.yml           # Argo CD + app of apps -> the whole stack
 ansible-playbook -i lab/inventory ansible/demo.yml           # demo image -> servers (Argo CD deploys the app)
+(cd examples && docker compose up -d --build)                # optional: example apps on this machine (examples/)
 source scripts/env.sh && k9s                                 # kubectl/helm/k9s with ./kubeconfig
 ```
 
@@ -105,12 +110,16 @@ Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 10053 graf
 192.168.56.1  keycloak.company.org
 192.168.56.20 grafana.lgtm.company.org loki.lgtm.company.org tempo.lgtm.company.org mimir.lgtm.company.org
 192.168.56.20 pyroscope.lgtm.company.org alloy.lgtm.company.org garage.lgtm.company.org argocd.lgtm.company.org
+192.168.56.20 headlamp.lgtm.company.org faro.lgtm.company.org postgres.lgtm.company.org
 ```
 
 | URL | What |
 |---|---|
 | https://grafana.lgtm.company.org | Grafana: Keycloak login, or `admin` / `.secrets/grafana_admin_password` |
 | https://argocd.lgtm.company.org | Argo CD: `admin` / Secret `argocd/argocd-initial-admin-secret` |
+| https://headlamp.lgtm.company.org | Headlamp (Kubernetes UI): token from `kubectl -n headlamp create token headlamp` |
+| https://faro.lgtm.company.org/&lt;tenant&gt;/collect | Grafana Faro receiver for browser apps |
+| postgres.lgtm.company.org:5432 | Grafana's PostgreSQL (see [below](#grafanas-postgresql-from-outside-the-cluster)) |
 | https://alloy.lgtm.company.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/*`) and Pyroscope pushes (`/ingest`) |
 | https://{loki,mimir,tempo,pyroscope,garage}.lgtm.company.org | backend APIs (multi-tenant: send `X-Scope-OrgID`) |
 
@@ -193,6 +202,48 @@ All playbooks can be re-run, and a re-run applies new settings:
   Partial runs: `--tags images` ships new images, `--tags otel-import` updates the import directories.
 * `demo.yml` loads the image and restarts the pods only when the image ID changed.
 * Exception: `site.yml` **resets Garage** on every run.
+
+## Storage: TopoLVM
+
+PersistentVolumes (Loki, Mimir, Pyroscope, Grafana's PostgreSQL) are logical volumes on the server where the
+pod runs. **TopoLVM** carves them from the volume group `topolvm`. `site.yml` (`ansible/roles/topolvm`) creates
+that volume group on one whole disk per server, named by `topolvm_disk` in the inventory; a `/dev/disk/by-id/`
+path is the safe choice. Garage takes every other empty disk.
+* StorageClass `topolvm` is the default: `WaitForFirstConsumer`, so the volume is created on the node the pod
+  is scheduled to, which TopoLVM picks by free space (storage capacity tracking). Volumes can be expanded.
+* The volume group is created once and kept on re-runs; the disk is **not** wiped again.
+* `local-path` (RKE2) is still installed, but no longer the default.
+* Volumes are local: if a server is lost, so are its volumes. The workloads replicate (replication factor
+  3, CloudNativePG replicas).
+
+Lab: each VM has a 20 GB disk with the serial `topolvm` (`/dev/disk/by-id/virtio-topolvm`).
+
+## Headlamp
+
+Kubernetes web UI at https://headlamp.<domain>. Log in with a ServiceAccount token, e.g. the chart's
+cluster-admin account:
+
+```bash
+kubectl -n headlamp create token headlamp --duration 8h
+```
+
+## Grafana's PostgreSQL from outside the cluster
+
+With `grafana_db_external: true`, port **5432 of the ingress VIP** leads to the primary of Grafana's
+PostgreSQL (CloudNativePG, Service `grafana-db-rw`). Traefik has a TCP entrypoint `postgres` that passes the
+connection through untouched.
+
+**Does it need a hostname like `postgres.<domain>`?** Not for routing. PostgreSQL starts in plain text and
+switches to TLS inside its own protocol, so a proxy can't read a hostname (SNI) from the connection. It can
+only route by port: one database per port. `postgres.<domain>` works as a name anyway, because DNS
+`*.<domain>` already points to the ingress VIP. The server certificate also contains `postgres.<domain>`, so
+`verify-full` works with the cluster's CA:
+
+```bash
+kubectl -n lgtm get secret grafana-db-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > grafana-db-ca.crt
+kubectl -n lgtm get secret grafana-db-app -o jsonpath='{.data.password}' | base64 -d; echo
+psql "host=postgres.lgtm.company.org port=5432 dbname=grafana user=grafana sslmode=verify-full sslrootcert=grafana-db-ca.crt"
+```
 
 ## Trusted CA certificates (`certs/`)
 
@@ -284,6 +335,28 @@ shows:
 * per-node CPU, memory, disk and network, and usage per namespace;
 * scrape targets, ingest rate per signal, ring health;
 * Garage health and capacity, PostgreSQL replication lag.
+
+## Frontend telemetry: Grafana Faro
+
+Browser apps send Faro data to `http(s)://faro.<domain>/<tenant>/collect`. Alloy runs one `faro.receiver` per
+tenant (ports 12347 `demo`, 12348 `platform`); Traefik strips the `/<tenant>` prefix and picks the
+receiver by path. Each receiver writes to Loki and Tempo with its tenant. `faro.receiver` doesn't pass
+request headers on, so the tenant can't come from `X-Scope-OrgID` the way it does for OTLP.
+Adding a tenant: a receiver/loki.write/exporter triple in `k8s/alloy/config.alloy`, a port in
+`k8s/values/alloy.yaml`, a path in `argocd/platform/templates/ingress.yaml`.
+
+Example: `examples/frontend` (see [Example apps](#example-apps-outside-the-cluster)).
+
+## Example apps outside the cluster
+
+[`examples/`](examples/README.md) shows teams how to send telemetry from their own services. It isn't part of
+any deployment.
+* A React frontend with Faro.
+* Five Spring Boot services in a diamond-shaped call graph, with the OTel Java agent and Pyroscope.
+* PostgreSQL with a slow query log and an Alloy sidecar.
+* An order id that can be followed from the browser to the database (dashboard **Order journey**).
+* The same apps on a 3-node Docker Swarm without agents: Beyla, container logs, eBPF profiles, and one
+  Prometheus scraper.
 
 ## OTLP/JSON import
 

@@ -1,0 +1,142 @@
+// Alloy sidecar of the example PostgreSQL (shares its network namespace and its log volume).
+// Everything goes to the LGTM cluster's single entry point, Alloy at alloy.<domain> (OTLP/HTTP), with the
+// tenant header X-Scope-OrgID. Environment: LGTM_OTLP_URL, LGTM_TENANT.
+//   metrics: postgres exporter (pg_stat_statements, connections, ...) -> Mimir
+//   logs:    PostgreSQL's JSON log (slow queries) -> Loki, with trace_id/span_id and order.id from the SQL
+//            comments, so a slow query links to its trace and shows up when following an order
+
+otelcol.exporter.otlphttp "lgtm" {
+  client {
+    endpoint = sys.env("LGTM_OTLP_URL")
+    headers  = { "X-Scope-OrgID" = sys.env("LGTM_TENANT") }
+  }
+}
+
+otelcol.processor.resourcedetection "default" {
+  detectors = ["env"]     // OTEL_RESOURCE_ATTRIBUTES: service.name, service.namespace, ...
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.lgtm.input]
+    logs    = [otelcol.exporter.otlphttp.lgtm.input]
+  }
+}
+
+// ---------------- Metrics ----------------
+prometheus.exporter.postgres "pg" {
+  data_source_names  = ["postgresql://alloy:alloy@localhost:5432/shop?sslmode=disable"]
+  enabled_collectors = ["stat_statements"]
+}
+
+prometheus.scrape "pg" {
+  targets         = prometheus.exporter.postgres.pg.targets
+  scrape_interval = "15s"
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+}
+
+otelcol.receiver.prometheus "default" {
+  output {
+    metrics = [otelcol.processor.resourcedetection.default.input]
+  }
+}
+
+// ---------------- Logs ----------------
+// Persist read offsets so a restart neither re-sends nor skips lines
+otelcol.storage.file "offsets" {
+  directory = "/var/lib/alloy/data/filelog"
+}
+
+otelcol.receiver.filelog "pg" {
+  include  = ["/var/log/postgresql/*.json"]
+  start_at = "beginning"
+  storage  = otelcol.storage.file.offsets.handler
+  output {
+    logs = [otelcol.processor.transform.pg.input]
+  }
+}
+
+otelcol.processor.transform "pg" {
+  error_mode = "ignore"
+
+  // 1) Raw JSON line -> attributes (original line kept as log.record.original)
+  log_statements {
+    context    = "log"
+    conditions = [`body != nil and Substring(body, 0, 2) == "{\""`]
+    statements = [
+      `set(attributes["log.record.original"], body)`,
+      `merge_maps(attributes, ParseJSON(body), "upsert")`,
+    ]
+  }
+
+  // 2) Timestamp + severity normalization (OTel Logs Data Model)
+  log_statements {
+    context = "log"
+    statements = [
+      `set(time, Time(attributes["timestamp"], "%Y-%m-%d %H:%M:%S.%f %Z")) where attributes["timestamp"] != nil`,
+      `set(observed_time, time) where attributes["timestamp"] != nil`,
+
+      `set(severity_text, ToUpperCase(attributes["error_severity"])) where attributes["error_severity"] != nil`,
+      `set(severity_number, SEVERITY_NUMBER_DEBUG)  where IsMatch(severity_text, "^DEBUG")`,
+      `set(severity_number, SEVERITY_NUMBER_INFO)   where severity_text == "INFO"`,
+      `set(severity_number, SEVERITY_NUMBER_INFO2)  where severity_text == "NOTICE"`,
+      `set(severity_number, SEVERITY_NUMBER_INFO4)  where severity_text == "LOG"`,
+      `set(severity_number, SEVERITY_NUMBER_WARN)   where severity_text == "WARNING"`,
+      `set(severity_number, SEVERITY_NUMBER_ERROR)  where severity_text == "ERROR"`,
+      `set(severity_number, SEVERITY_NUMBER_FATAL)  where severity_text == "FATAL"`,
+      `set(severity_number, SEVERITY_NUMBER_FATAL4) where severity_text == "PANIC"`,
+    ]
+  }
+
+  // 3) Legacy jsonlog fields -> Semantic Conventions (+ postgresql.* for the rest)
+  log_statements {
+    context = "log"
+    statements = [
+      `set(body, attributes["message"]) where attributes["message"] != nil`,
+
+      `set(attributes["user.name"], attributes["user"]) where attributes["user"] != nil`,
+      `set(attributes["db.namespace"], attributes["dbname"]) where attributes["dbname"] != nil`,
+      `set(attributes["db.query.text"], attributes["statement"]) where attributes["statement"] != nil`,
+      `set(attributes["db.response.status_code"], attributes["state_code"]) where attributes["state_code"] != nil`,
+      `set(attributes["client.address"], attributes["remote_host"]) where attributes["remote_host"] != nil`,
+      `set(attributes["client.port"], Int(attributes["remote_port"])) where attributes["remote_port"] != nil`,
+      `set(attributes["process.pid"], Int(attributes["pid"])) where attributes["pid"] != nil`,
+      `set(attributes["session.id"], attributes["session_id"]) where attributes["session_id"] != nil`,
+      `set(attributes["postgresql.backend_type"], attributes["backend_type"]) where attributes["backend_type"] != nil`,
+      `set(attributes["postgresql.application_name"], attributes["application_name"]) where attributes["application_name"] != nil`,
+      // query_id is int64; ParseJSON yields float64 and loses precision -> take it from the raw line
+      `set(attributes["postgresql.query_id"], ExtractPatterns(attributes["log.record.original"], "\"query_id\":(?P<id>-?[0-9]+)")["id"]) where attributes["query_id"] != nil`,
+      `set(attributes["postgresql.detail"], attributes["detail"]) where attributes["detail"] != nil`,
+
+      `delete_matching_keys(attributes, "^(timestamp|error_severity|message|user|dbname|statement|state_code|remote_host|remote_port|pid|leader_pid|session_id|func_name|file_name|file_line_num|backend_type|application_name|query_id|txid|vxid|detail|hint|context|internal_query|line_num|cursor_position|internal_position|ps|session_start)$")`,
+    ]
+  }
+
+  // 4) Correlation: the SQL comments of the statement (in the message of a slow query)
+  //    /*traceparent='00-<trace id>-<span id>-<flags>'*/  (OTel Java agent, sqlcommenter) -> trace_id, span_id
+  //    /* order.id='<id>' */                                (examples/backend CatalogController) -> order.id
+  log_statements {
+    context    = "log"
+    conditions = [`IsMatch(body, "traceparent='00-[0-9a-f]{32}-[0-9a-f]{16}-")`]
+    statements = [
+      `set(cache["tp"], ExtractPatterns(body, "traceparent='00-(?P<trace>[0-9a-f]{32})-(?P<span>[0-9a-f]{16})-"))`,
+      `set(trace_id.string, cache["tp"]["trace"])`,
+      `set(span_id.string, cache["tp"]["span"])`,
+    ]
+  }
+  log_statements {
+    context    = "log"
+    conditions = [`IsMatch(body, "order\\.id='[A-Za-z0-9-]+'")`]
+    statements = [
+      `set(attributes["order.id"], ExtractPatterns(body, "order\\.id='(?P<id>[A-Za-z0-9-]+)'")["id"])`,
+    ]
+  }
+
+  output {
+    logs = [otelcol.processor.resourcedetection.default.input]
+  }
+}

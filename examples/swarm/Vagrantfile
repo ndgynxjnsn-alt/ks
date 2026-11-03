@@ -1,0 +1,31 @@
+# -*- mode: ruby -*-
+# Example Docker Swarm: 3 VMs (swarm1 = manager, swarm2/3 = workers). Unlike the cluster VMs they have internet
+# access (NAT management network) to install Docker and pull images. They join the lab network lgtm-net
+# (192.168.56.0/24, created by lab/Vagrantfile) to reach the LGTM cluster's ingress VIP.
+#   vagrant up && ansible-playbook -i inventory.yml swarm.yml
+NODES = {
+  "swarm1" => "192.168.56.31",
+  "swarm2" => "192.168.56.32",
+  "swarm3" => "192.168.56.33",
+}
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "cloud-image/ubuntu-26.04"
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.provider :libvirt do |lv|
+    lv.memory = 1792
+    lv.cpus = 2
+    lv.cpu_mode = "host-passthrough"
+    lv.default_prefix = "lgtm_"            # libvirt domains lgtm_swarm1 ...
+    lv.machine_virtual_size = 20
+  end
+
+  NODES.each do |name, ip|
+    config.vm.define name do |node|
+      node.vm.hostname = name
+      node.vm.network :private_network, ip: ip,
+        libvirt__network_name: "lgtm-net", libvirt__forward_mode: "none", libvirt__dhcp_enabled: false
+    end
+  end
+end

@@ -1,0 +1,169 @@
+# Example apps OUTSIDE the cluster, feeding the LGTM stack like a team's own services would. Not part of any
+# deployment: run them on any Docker host that reaches the cluster's ingress VIP.
+#   docker compose up -d --build          then open http://localhost:8088 and order something
+#
+#   frontend      React + Grafana Faro (browser logs, errors, Web Vitals, traces) -> faro.<domain>/<tenant>/collect
+#   shop          a: POST /api/orders -> stock, pricing, notification
+#   stock         b: -> catalog          the diamond: shop -> stock -> catalog
+#   pricing       c: -> catalog                       shop -> pricing -> catalog
+#   catalog       d: -> PostgreSQL (every ~5th query is slow)
+#   notification  e
+#   postgres      slow query log (JSON) + pg_stat_statements; Alloy sidecar -> metrics + logs
+#   loadgen       an order every few seconds (backend traces only; the browser traces come from you)
+# The backends run with the OTel Java agent (traces, metrics, logs) and the Pyroscope agent + OTel extension
+# (profiles linked to spans). Settings: .env (cluster address, tenant).
+name: lgtm-examples
+
+x-backend: &backend
+  image: lgtm-examples/backend:1.0
+  build: ./backend
+  restart: unless-stopped
+  mem_limit: 384m
+  extra_hosts: &lgtm-hosts
+    - "alloy.${LGTM_DOMAIN}:${LGTM_INGRESS_IP}"
+  environment: &backend-env
+    # Pyroscope agent (profiles), then the OTel Java agent with the Pyroscope extension, which stamps the
+    # profiles with span ids: Tempo span -> its profile ("Profiles for this span")
+    JAVA_TOOL_OPTIONS: -javaagent:/agents/pyroscope.jar -javaagent:/agents/opentelemetry-javaagent.jar
+    OTEL_JAVAAGENT_EXTENSIONS: /agents/pyroscope-otel.jar
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy.${LGTM_DOMAIN}
+    OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    OTEL_EXPORTER_OTLP_HEADERS: X-Scope-OrgID=${LGTM_TENANT}
+    OTEL_METRIC_EXPORT_INTERVAL: "15000"
+    OTEL_INSTRUMENTATION_MICROMETER_ENABLED: "true"
+    # the trace context as SQL comment -> PostgreSQL's slow query log links to the trace
+    OTEL_INSTRUMENTATION_JDBC_EXPERIMENTAL_SQLCOMMENTER_ENABLED: "true"
+    # the business id (MDC order.id, examples/backend OrderId.java) as log attribute -> Loki: order_id
+    OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_CAPTURE_MDC_ATTRIBUTES: order.id
+    OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_LOG_ATTRIBUTES: "true"
+    PYROSCOPE_SERVER_ADDRESS: http://alloy.${LGTM_DOMAIN}
+    PYROSCOPE_FORMAT: jfr
+    PYROSCOPE_PROFILER_EVENT: itimer
+    PYROSCOPE_PROFILER_ALLOC: 512k
+    PYROSCOPE_UPLOAD_INTERVAL: 15s
+    PYROSCOPE_LABELS: tenant=${LGTM_TENANT},service_namespace=examples
+    OTEL_PYROSCOPE_START_PROFILING: "false"   # the Pyroscope agent above already profiles
+
+services:
+  shop:
+    <<: *backend
+    ports: ["8081:8080"]                  # for "npm run dev" in frontend/
+    environment:
+      <<: *backend-env
+      SPRING_PROFILES_ACTIVE: shop
+      OTEL_SERVICE_NAME: shop
+      PYROSCOPE_APPLICATION_NAME: shop
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=examples,deployment.environment.name=lab
+
+  stock:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SPRING_PROFILES_ACTIVE: stock
+      OTEL_SERVICE_NAME: stock
+      PYROSCOPE_APPLICATION_NAME: stock
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=examples,deployment.environment.name=lab
+
+  pricing:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SPRING_PROFILES_ACTIVE: pricing
+      OTEL_SERVICE_NAME: pricing
+      PYROSCOPE_APPLICATION_NAME: pricing
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=examples,deployment.environment.name=lab
+
+  catalog:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SPRING_PROFILES_ACTIVE: catalog
+      OTEL_SERVICE_NAME: catalog
+      PYROSCOPE_APPLICATION_NAME: catalog
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=examples,deployment.environment.name=lab
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  notification:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SPRING_PROFILES_ACTIVE: notification
+      OTEL_SERVICE_NAME: notification
+      PYROSCOPE_APPLICATION_NAME: notification
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=examples,deployment.environment.name=lab
+
+  frontend:
+    image: lgtm-examples/frontend:1.0
+    build:
+      context: ./frontend
+      args:
+        VITE_FARO_URL: http://faro.${LGTM_DOMAIN}/${LGTM_TENANT}/collect
+    restart: unless-stopped
+    ports: ["8088:8080"]
+    depends_on: [shop]
+
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    configs:
+      - { source: pg_conf, target: /etc/postgresql/postgresql.conf }
+      - { source: pg_init, target: /docker-entrypoint-initdb.d/01-init.sql }
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - pglogs:/var/log/postgresql
+    extra_hosts: *lgtm-hosts               # for the sidecar, which shares this network namespace
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 10
+
+  # Sidecar: same network namespace as postgres (localhost:5432) and the same log volume
+  postgres-alloy:
+    image: grafana/alloy:v1.21.3
+    restart: unless-stopped
+    network_mode: service:postgres
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - --stability.level=public-preview   # otelcol.receiver.filelog
+      - /etc/alloy/config.alloy
+    environment:
+      LGTM_OTLP_URL: http://alloy.${LGTM_DOMAIN}
+      LGTM_TENANT: ${LGTM_TENANT}
+      OTEL_RESOURCE_ATTRIBUTES: >-
+        service.name=postgresql,service.namespace=examples,deployment.environment.name=lab,db.system.name=postgresql
+    configs:
+      - { source: pg_alloy, target: /etc/alloy/config.alloy }
+    volumes:
+      - pglogs:/var/log/postgresql:ro
+      - alloydata:/var/lib/alloy/data
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  loadgen:
+    image: curlimages/curl:8.17.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" -X POST http://frontend:8080/api/orders \
+            -H 'Content-Type: application/json' -d "{\"itemId\": $$(( $$(date +%s) % 50 + 1 ))}"
+          sleep 4
+        done
+    depends_on: [frontend]
+
+volumes:
+  pgdata:
+  pglogs:
+  alloydata:
+
+configs:
+  pg_conf: { file: ./postgres/postgresql.conf }
+  pg_init: { file: ./postgres/init.sql }
+  pg_alloy: { file: ./postgres/alloy.alloy }

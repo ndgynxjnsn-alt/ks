@@ -1,0 +1,104 @@
+// One per Swarm node, next to Beyla (swarm.yml: container "alloy-node", privileged, host PID namespace,
+// Docker socket). Started by Ansible instead of as a global Swarm service, because Swarm services can't
+// share the host PID namespace (https://github.com/moby/moby/issues/25303), which eBPF profiling needs.
+//   container logs of this node      -> Loki      (service_name = the Swarm service, or the container name)
+//   eBPF CPU profiles of containers  -> Pyroscope (no agent in the apps)
+// Everything goes to the LGTM cluster's Alloy, tenant LGTM_TENANT.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_swarm_service_name"]
+    regex         = "shop_(.*)"
+    target_label  = "service_name"
+  }
+  // containers that aren't Swarm tasks (beyla, alloy-node): the container name
+  rule {
+    source_labels = ["service_name", "container"]
+    separator     = ";"
+    regex         = ";(.+)"
+    target_label  = "service_name"
+  }
+  rule {
+    target_label = "host_name"
+    replacement  = constants.hostname
+  }
+}
+
+// ---------------- Logs ----------------
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [otelcol.receiver.loki.default.receiver]
+}
+
+otelcol.receiver.loki "default" {
+  output {
+    logs = [otelcol.processor.transform.logs.input]
+  }
+}
+
+// Loki labels arrive as log attributes; the service name and host belong to the resource (-> Loki labels)
+otelcol.processor.transform "logs" {
+  error_mode = "ignore"
+  log_statements {
+    context = "log"
+    statements = [
+      `set(resource.attributes["service.name"], attributes["service_name"])`,
+      `set(resource.attributes["service.namespace"], "swarm")`,
+      `set(resource.attributes["deployment.environment.name"], "swarm")`,
+      `set(resource.attributes["host.name"], attributes["host_name"])`,
+      `delete_matching_keys(attributes, "^(service_name|host_name)$")`,
+    ]
+  }
+  output {
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    logs = [otelcol.exporter.otlphttp.lgtm.input]
+  }
+}
+
+otelcol.exporter.otlphttp "lgtm" {
+  client {
+    endpoint = sys.env("LGTM_OTLP_URL")
+    headers  = { "X-Scope-OrgID" = sys.env("LGTM_TENANT") }
+  }
+}
+
+// ---------------- Profiles ----------------
+discovery.relabel "profiles" {
+  targets = discovery.relabel.containers.output
+  rule {
+    source_labels = ["__meta_docker_container_id"]
+    target_label  = "__container_id__"
+  }
+}
+
+pyroscope.ebpf "containers" {
+  targets    = discovery.relabel.profiles.output
+  forward_to = [pyroscope.write.lgtm.receiver]
+}
+
+// The cluster's Alloy picks the tenant from the label "tenant" (k8s/alloy/config.alloy)
+pyroscope.write "lgtm" {
+  endpoint {
+    url = sys.env("LGTM_OTLP_URL")
+  }
+  external_labels = {
+    "tenant"            = sys.env("LGTM_TENANT"),
+    "service_namespace" = "swarm",
+  }
+}

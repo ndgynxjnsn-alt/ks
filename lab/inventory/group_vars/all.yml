@@ -43,7 +43,8 @@ gitops:
 # Adding a tenant: add it here, and add its pyroscope.relabel/write pair in k8s/values/alloy.yaml.
 tenants:
   - name: demo                     # the demo shop
-    dashboards: [lgtm-demo.json]   # from k8s/dashboards, imported into the tenant's Grafana org
+    # from argocd/platform/dashboards, imported into the tenant's Grafana org
+    dashboards: [lgtm-demo.json, order-journey.json]
   - name: platform                 # the cluster itself: pod logs (all namespaces except demo) and metrics
     dashboards: [cluster-health.json]
 

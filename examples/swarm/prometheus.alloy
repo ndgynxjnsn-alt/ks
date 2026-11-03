@@ -1,0 +1,104 @@
+// The single Prometheus scraper of the Swarm (stack service "prometheus", on the manager).
+// Finds every task of a service labelled prometheus.io/scrape=true (deploy.labels in stack.yml) and scrapes it
+// on prometheus.io/port + prometheus.io/path over the stack network; plus PostgreSQL via the postgres exporter.
+// Sends everything as OTLP to the LGTM cluster's Alloy (tenant header X-Scope-OrgID).
+
+discovery.dockerswarm "tasks" {
+  host = "unix:///var/run/docker.sock"
+  role = "tasks"
+}
+
+discovery.relabel "scrape" {
+  targets = discovery.dockerswarm.tasks.targets
+  rule {
+    source_labels = ["__meta_dockerswarm_service_label_prometheus_io_scrape"]
+    regex         = "true"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_dockerswarm_task_desired_state"]
+    regex         = "running"
+    action        = "keep"
+  }
+  // one target per task: its address on the stack network (this Alloy is attached to it)
+  rule {
+    source_labels = ["__meta_dockerswarm_network_name"]
+    regex         = "shop_shop"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__address__", "__meta_dockerswarm_service_label_prometheus_io_port"]
+    regex         = "([^:]+)(?::\\d+)?;(\\d+)"
+    replacement   = "$1:$2"
+    target_label  = "__address__"
+  }
+  rule {
+    source_labels = ["__meta_dockerswarm_service_label_prometheus_io_path"]
+    target_label  = "__metrics_path__"
+  }
+  // job -> service.name (otelcol.receiver.prometheus): the Swarm service without the stack prefix
+  rule {
+    source_labels = ["__meta_dockerswarm_service_name"]
+    regex         = "shop_(.*)"
+    target_label  = "job"
+  }
+  rule {
+    source_labels = ["__meta_dockerswarm_node_hostname"]
+    target_label  = "host_name"
+  }
+}
+
+prometheus.scrape "swarm" {
+  targets         = discovery.relabel.scrape.output
+  scrape_interval = "15s"
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+}
+
+prometheus.exporter.postgres "pg" {
+  data_source_names  = ["postgresql://alloy:alloy@postgres:5432/shop?sslmode=disable"]
+  enabled_collectors = ["stat_statements"]
+}
+
+discovery.relabel "pg" {
+  targets = prometheus.exporter.postgres.pg.targets
+  rule {
+    target_label = "job"
+    replacement  = "postgresql"
+  }
+}
+
+prometheus.scrape "pg" {
+  targets         = discovery.relabel.pg.output
+  scrape_interval = "15s"
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+}
+
+otelcol.receiver.prometheus "default" {
+  output {
+    metrics = [otelcol.processor.attributes.swarm.input]
+  }
+}
+
+otelcol.processor.attributes "swarm" {
+  action {
+    key    = "deployment.environment.name"
+    value  = "swarm"
+    action = "upsert"
+  }
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.lgtm.input]
+  }
+}
+
+otelcol.exporter.otlphttp "lgtm" {
+  client {
+    endpoint = sys.env("LGTM_OTLP_URL")
+    headers  = { "X-Scope-OrgID" = sys.env("LGTM_TENANT") }
+  }
+}

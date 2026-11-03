@@ -1,0 +1,157 @@
+# Docker Swarm with the example shop, observed without agents in the apps.
+#   cd examples/swarm && vagrant up && ansible-playbook -i inventory.yml swarm.yml
+# Needs the images from examples/ (docker compose build) on this machine; they are copied to every node.
+- name: Images of the example apps (built on this machine)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    images: { backend: lgtm-examples/backend:1.0, frontend: lgtm-examples/frontend:1.0 }
+  tasks:
+    - name: Build the images (examples/docker-compose.yml)
+      ansible.builtin.command:
+        cmd: docker compose build
+        chdir: "{{ playbook_dir }}/.."
+      register: build
+      changed_when: "'Built' in build.stderr and 'CACHED' not in build.stderr"
+
+    - name: Image ids
+      ansible.builtin.command: docker image inspect --format {{ '{{.Id}}' }} {{ item.value }}
+      loop: "{{ images | dict2items }}"
+      register: image_ids
+      changed_when: false
+
+    - name: Directory for the image archives
+      ansible.builtin.file: { path: "{{ playbook_dir }}/.images", state: directory, mode: "0755" }
+
+    - name: Save the images
+      ansible.builtin.command:
+        cmd: docker save -o {{ archive }} {{ item.item.value }}
+        creates: "{{ archive }}"
+      loop: "{{ image_ids.results }}"
+      loop_control: { label: "{{ item.item.value }}" }
+      vars:
+        archive: "{{ playbook_dir }}/.images/{{ item.item.key }}-{{ item.stdout[7:19] }}.tar"
+
+- name: Docker on every node
+  hosts: swarm
+  become: true
+  tasks:
+    - name: Docker and the Python library of the community.docker modules
+      ansible.builtin.apt: { name: [docker.io, python3-docker], update_cache: true, cache_valid_time: 3600 }
+
+    - name: Load the example images (only if the node doesn't have this build)
+      ansible.builtin.include_tasks: tasks/load-image.yml
+      loop: "{{ hostvars['localhost'].image_ids.results }}"
+      loop_control: { loop_var: image, label: "{{ image.item.value }}" }
+
+- name: Swarm manager
+  hosts: managers
+  become: true
+  tasks:
+    - name: Initialize the Swarm
+      community.docker.docker_swarm:
+        state: present
+        advertise_addr: "{{ ansible_host }}"
+      register: swarm
+
+- name: Swarm workers
+  hosts: workers
+  become: true
+  tasks:
+    - name: Join the Swarm
+      community.docker.docker_swarm:
+        state: join
+        advertise_addr: "{{ ansible_host }}"
+        join_token: "{{ hostvars[groups.managers[0]].swarm.swarm_facts.JoinTokens.Worker }}"
+        remote_addrs: ["{{ hostvars[groups.managers[0]].ansible_host }}:2377"]
+
+# Beyla and alloy-node need the host PID namespace, which Swarm services can't have
+# (https://github.com/moby/moby/issues/25303): plain containers on every node instead of global services.
+- name: Beyla (eBPF RED metrics + spans) and alloy-node (logs, eBPF profiles) on every node
+  hosts: swarm
+  become: true
+  vars:
+    lgtm_hosts: { "alloy.{{ lgtm_domain }}": "{{ lgtm_ingress_ip }}" }
+  tasks:
+    - name: Configuration directory
+      ansible.builtin.file: { path: /etc/lgtm, state: directory, mode: "0755" }
+
+    - name: Configuration of alloy-node
+      ansible.builtin.copy: { src: alloy-node.alloy, dest: /etc/lgtm/alloy-node.alloy, mode: "0644" }
+      register: alloy_node_config
+
+    - name: Container alloy-node
+      community.docker.docker_container:
+        name: alloy-node
+        image: "{{ alloy_image }}"
+        restart_policy: unless-stopped
+        privileged: true
+        pid_mode: host
+        command: [run, --server.http.listen-addr=127.0.0.1:12345, --storage.path=/var/lib/alloy/data,
+                  --stability.level=public-preview, /etc/alloy/config.alloy]
+        env:
+          LGTM_OTLP_URL: "http://alloy.{{ lgtm_domain }}"
+          LGTM_TENANT: "{{ lgtm_tenant }}"
+        etc_hosts: "{{ lgtm_hosts }}"
+        volumes:
+          - /etc/lgtm/alloy-node.alloy:/etc/alloy/config.alloy:ro
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - /sys/kernel/debug:/sys/kernel/debug
+          - alloy-node-data:/var/lib/alloy/data
+        restart: "{{ alloy_node_config.changed }}"
+
+    # Beyla instruments every process listening on 8080 (the backends and the frontend's nginx). It names a
+    # service after the process' OTEL_SERVICE_NAME (stack.yml), and exports OTLP to the cluster's Alloy.
+    - name: Container beyla
+      community.docker.docker_container:
+        name: beyla
+        image: "{{ beyla_image }}"
+        restart_policy: unless-stopped
+        privileged: true
+        pid_mode: host
+        env:
+          BEYLA_OPEN_PORT: "8080"
+          BEYLA_OTEL_METRICS_FEATURES: application,application_span,application_service_graph
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy.{{ lgtm_domain }}"
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OTEL_EXPORTER_OTLP_HEADERS: "X-Scope-OrgID={{ lgtm_tenant }}"
+          OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=swarm,host.name={{ inventory_hostname }}"
+        etc_hosts: "{{ lgtm_hosts }}"
+        volumes: [/sys/kernel/security:/sys/kernel/security]
+
+- name: The example stack
+  hosts: managers
+  become: true
+  vars:
+    stack_dir: /opt/lgtm-examples
+  tasks:
+    - name: Stack directory
+      ansible.builtin.file: { path: "{{ stack_dir }}", state: directory, mode: "0755" }
+
+    - name: Stack files
+      ansible.builtin.copy: { src: "{{ item.src }}", dest: "{{ stack_dir }}/{{ item.dest }}", mode: "0644" }
+      loop:
+        - { src: stack.yml, dest: stack.yml }
+        - { src: prometheus.alloy, dest: prometheus.alloy }
+        - { src: ../postgres/init.sql, dest: init.sql }
+
+    - name: Deploy the stack
+      ansible.builtin.command:
+        cmd: docker stack deploy --detach=true -c stack.yml shop
+        chdir: "{{ stack_dir }}"
+      environment:
+        ALLOY_IMAGE: "{{ alloy_image }}"
+        LGTM_DOMAIN: "{{ lgtm_domain }}"
+        LGTM_INGRESS_IP: "{{ lgtm_ingress_ip }}"
+        LGTM_TENANT: "{{ lgtm_tenant }}"
+        PG_INIT_HASH: "{{ lookup('file', '../postgres/init.sql') | hash('sha1') | truncate(12, true, '') }}"
+        PROMETHEUS_HASH: "{{ lookup('file', 'prometheus.alloy') | hash('sha1') | truncate(12, true, '') }}"
+      register: deploy
+      changed_when: "'Creating' in deploy.stdout"
+
+    - name: Where to look
+      ansible.builtin.debug:
+        msg:
+          - "Shop: http://{{ ansible_host }}:8088   (any Swarm node)"
+          - "Grafana, tenant {{ lgtm_tenant }}: service.namespace / deployment_environment_name = swarm"

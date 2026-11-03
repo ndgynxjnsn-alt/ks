@@ -1,0 +1,24 @@
+# The Swarm VMs of ./Vagrantfile (login: Vagrant's generated SSH keys).
+all:
+  children:
+    swarm:
+      children:
+        managers:
+          hosts:
+            swarm1: { ansible_host: 192.168.56.31 }
+        workers:
+          hosts:
+            swarm2: { ansible_host: 192.168.56.32 }
+            swarm3: { ansible_host: 192.168.56.33 }
+      vars:
+        ansible_user: vagrant
+        ansible_ssh_private_key_file: >-
+          {{ inventory_dir }}/.vagrant/machines/{{ inventory_hostname }}/libvirt/private_key
+        ansible_ssh_common_args: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+  vars:
+    # the LGTM cluster: hostnames <name>.<domain> on the ingress VIP, and the tenant of all data
+    lgtm_domain: lgtm.company.org
+    lgtm_ingress_ip: 192.168.56.20
+    lgtm_tenant: demo
+    alloy_image: grafana/alloy:v1.21.3
+    beyla_image: grafana/beyla:3.40.0

@@ -1,0 +1,31 @@
+# Shared by all five roles; the role is the Spring profile (SPRING_PROFILES_ACTIVE).
+spring:
+  threads:
+    virtual:
+      enabled: true
+  datasource:                  # only the catalog role opens connections (the pool starts lazily)
+    url: ${DB_URL:jdbc:postgresql://postgres:5432/shop}
+    username: ${DB_USER:shop}
+    password: ${DB_PASSWORD:shop}
+    hikari:
+      initialization-fail-timeout: -1
+
+shop:
+  stock-url: ${STOCK_URL:http://stock:8080}
+  pricing-url: ${PRICING_URL:http://pricing:8080}
+  catalog-url: ${CATALOG_URL:http://catalog:8080}
+  notification-url: ${NOTIFICATION_URL:http://notification:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  health:
+    db:
+      enabled: false           # four of the five roles have no database
+
+# stdout (Docker logs, no agent): the business id in every line
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{order.id:-}] %logger{20} - %msg%n"

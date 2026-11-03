@@ -9,3 +9,8 @@ artifacts/
 lab/external/.generated/
 .ansible/
 postgres-scrape/
+examples/swarm/.vagrant/
+examples/swarm/.images/
+examples/frontend/node_modules/
+examples/frontend/dist/
+examples/backend/target/
