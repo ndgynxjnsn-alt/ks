@@ -36,6 +36,8 @@ kind: IngressRouteTCP
 metadata:
   name: grafana-db
   namespace: lgtm
+  annotations:
+    kubernetes.io/ingress.class: traefik   # RKE2's Traefik only reads CRD objects of its class
 spec:
   entryPoints: [postgres]
   routes:

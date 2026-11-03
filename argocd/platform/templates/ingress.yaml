@@ -61,6 +61,8 @@ kind: Middleware
 metadata:
   name: faro-tenant
   namespace: lgtm
+  annotations:
+    kubernetes.io/ingress.class: traefik   # RKE2's Traefik only reads CRD objects of its class
 spec:
   stripPrefixRegex:
     regex: ["^/[^/]+"]
