@@ -87,7 +87,8 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 * Ansible ≥ 2.16 and `ansible-galaxy collection install -r requirements.yml`, `sshpass` (password login),
   `zstd`, `unzip`, `git`, `jq`. Internet access is only needed for `download.yml` and the demo build.
 * No Docker daemon for the cluster: images are fetched with `crane` and built with Jib/`crane append`.
-* Lab: KVM + libvirt + `vagrant-libvirt` (user in group `libvirt`), about 22 GB free RAM (3 × 7 GB VMs), and
+* Lab: KVM + libvirt + `vagrant-libvirt` (user in group `libvirt`), about 18 GB free RAM (3 × 6 GB VMs; with the
+  Docker Swarm examples another 6 GB, 3 × 2 GB, so 32 GB in the machine for everything at once), and
   Docker with compose for the stand-in services (`lab/external.yml` uses `sudo docker compose`, pass `-K`).
 
 ## Bring it up (lab)

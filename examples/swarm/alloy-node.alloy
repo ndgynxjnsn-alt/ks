@@ -87,9 +87,17 @@ discovery.relabel "profiles" {
   }
 }
 
+// Only the unwinders these apps need: Java (HotSpot) and native code (nginx, PostgreSQL). Each unwinder is an
+// eBPF program; on the lab VMs' kernel the verifier rejects the Python one, which would stop the component.
 pyroscope.ebpf "containers" {
-  targets    = discovery.relabel.profiles.output
-  forward_to = [pyroscope.write.lgtm.receiver]
+  targets        = discovery.relabel.profiles.output
+  forward_to     = [pyroscope.write.lgtm.receiver]
+  python_enabled = false
+  perl_enabled   = false
+  php_enabled    = false
+  ruby_enabled   = false
+  dotnet_enabled = false
+  v8_enabled     = false
 }
 
 // The cluster's Alloy picks the tenant from the label "tenant" (k8s/alloy/config.alloy)

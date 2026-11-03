@@ -24,7 +24,7 @@ Vagrant.configure("2") do |config|
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
   config.vm.provider :libvirt do |lv|
-    lv.memory = 5632
+    lv.memory = 6144
     lv.cpus = 4
     lv.cpu_mode = "host-passthrough"
     lv.default_prefix = "lgtm_"  # libvirt domain names lgtm_lgtm1 ... (independent of the directory name)
