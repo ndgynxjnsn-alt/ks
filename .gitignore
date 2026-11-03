@@ -8,3 +8,4 @@ apps/demo/target/
 artifacts/
 lab/external/.generated/
 .ansible/
+postgres-scrape/
