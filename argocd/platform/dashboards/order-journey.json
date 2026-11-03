@@ -74,7 +74,7 @@
       "id": 3,
       "type": "logs",
       "title": "Backend and database logs of this order",
-      "description": "OTLP log attribute order.id (backends: MDC; PostgreSQL: SQL comment) = structured metadata order_id",
+      "description": "OTLP log attribute order.id (backends: MDC; PostgreSQL: application_name) = structured metadata order_id",
       "datasource": {
         "type": "loki",
         "uid": "loki"

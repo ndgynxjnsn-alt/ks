@@ -2,8 +2,8 @@
 // Everything goes to the LGTM cluster's single entry point, Alloy at alloy.<domain> (OTLP/HTTP), with the
 // tenant header X-Scope-OrgID. Environment: LGTM_OTLP_URL, LGTM_TENANT.
 //   metrics: postgres exporter (pg_stat_statements, connections, ...) -> Mimir
-//   logs:    PostgreSQL's JSON log (slow queries) -> Loki, with trace_id/span_id and order.id from the SQL
-//            comments, so a slow query links to its trace and shows up when following an order
+//   logs:    PostgreSQL's JSON log (slow queries) -> Loki, with trace_id/span_id (SQL comment) and order.id
+//            (application_name), so a slow query links to its trace and shows up when following an order
 
 otelcol.exporter.otlphttp "lgtm" {
   client {
@@ -116,9 +116,9 @@ otelcol.processor.transform "pg" {
     ]
   }
 
-  // 4) Correlation: the SQL comments of the statement (in the message of a slow query)
-  //    /*traceparent='00-<trace id>-<span id>-<flags>'*/  (OTel Java agent, sqlcommenter) -> trace_id, span_id
-  //    /* order.id='<id>' */                                (examples/backend CatalogController) -> order.id
+  // 4) Correlation
+  //    SQL comment /*traceparent='00-<trace id>-<span id>-<flags>'*/ (OTel Java agent, sqlcommenter) -> trace_id, span_id
+  //    application_name "catalog order.id=<id>" (examples/backend CatalogController) -> order.id
   log_statements {
     context    = "log"
     conditions = [`IsMatch(body, "traceparent='00-[0-9a-f]{32}-[0-9a-f]{16}-")`]
@@ -130,9 +130,9 @@ otelcol.processor.transform "pg" {
   }
   log_statements {
     context    = "log"
-    conditions = [`IsMatch(body, "order\\.id='[A-Za-z0-9-]+'")`]
+    conditions = [`attributes["postgresql.application_name"] != nil and IsMatch(attributes["postgresql.application_name"], "order\\.id=[A-Za-z0-9-]+")`]
     statements = [
-      `set(attributes["order.id"], ExtractPatterns(body, "order\\.id='(?P<id>[A-Za-z0-9-]+)'")["id"])`,
+      `set(attributes["order.id"], ExtractPatterns(attributes["postgresql.application_name"], "order\\.id=(?P<id>[A-Za-z0-9-]+)")["id"])`,
     ]
   }
 

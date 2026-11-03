@@ -64,11 +64,13 @@ along explicitly. This is custom code: the agents only propagate the trace.
 | Browser | span `place order` with `order.id`; event `order_submitted`; header `X-Order-Id` + `baggage` (`frontend/src/orders.js`) | Tempo `{ span.order.id = "<id>" }`, Loki `{app_name="shop-frontend"} \|= "<id>"` |
 | Backends | filter reads the header (or baggage) → span attribute, MDC, outgoing header (`backend/.../OrderId.java`) | Tempo as above; Loki `{service_name=~".+"} \| order_id="<id>"` |
 | Logs | MDC `order.id` → log attribute (`OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_CAPTURE_MDC_ATTRIBUTES`) | the Loki query above |
-| Database | SQL comment `/* order.id='<id>' */` (`CatalogController.java`) → Alloy extracts it | the Loki query above |
+| Database | the session's `application_name` is `catalog order.id=<id>` during the query (JDBC client info, `CatalogController.java`). PostgreSQL logs it; Alloy extracts it. Also visible live in `pg_stat_activity`. | the Loki query above |
 
 The Grafana dashboard **Order journey** (org demo) does all of these queries for one pasted order id.
-The order id is validated (`[A-Za-z0-9-]`) before it goes into headers, logs and SQL.
-Don't put personal data into baggage or SQL comments.
+The order id is validated (`[A-Za-z0-9-]`) before it goes into headers, logs and the database session.
+Why not an SQL comment like the trace context? sqlcommenter leaves statements that already contain a comment
+alone, so a comment of our own would suppress the `traceparent`.
+Don't put personal data into baggage, SQL comments or application_name.
 
 ## Frontend: what Faro sends, and slow requests
 

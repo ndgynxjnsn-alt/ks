@@ -22,14 +22,14 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *   <li>span attribute order.id on the server span -> Tempo: {span.order.id="..."}</li>
  *   <li>MDC order.id -> every log line; the agent exports it as log attribute -> Loki: | order_id="..."</li>
  *   <li>out: header X-Order-Id + baggage on every RestClient call (the header also works without the agent)</li>
- *   <li>catalog: SQL comment order.id='...' -> PostgreSQL's slow query log (CatalogController)</li>
+ *   <li>catalog: session application_name "catalog order.id=..." -> PostgreSQL's log (CatalogController)</li>
  * </ul>
  */
 @Configuration
 public class OrderId {
     public static final String HEADER = "X-Order-Id";
     public static final String KEY = "order.id";
-    // only ids that are safe in a header, a log line and an SQL comment
+    // only ids that are safe in a header, a log line and an application_name
     private static final Pattern VALID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
     public static String current() {

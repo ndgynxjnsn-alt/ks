@@ -13,9 +13,10 @@ FROM eclipse-temurin:25-jre
 ARG OTEL_AGENT_VERSION=2.33.1
 ARG PYROSCOPE_AGENT_VERSION=2.9.2
 ARG PYROSCOPE_OTEL_VERSION=2.1.4
-ADD --chmod=644 https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v${OTEL_AGENT_VERSION}/opentelemetry-javaagent.jar /agents/
-ADD --chmod=644 https://github.com/grafana/pyroscope-java/releases/download/v${PYROSCOPE_AGENT_VERSION}/pyroscope.jar /agents/
-ADD --chmod=644 https://github.com/grafana/otel-profiling-java/releases/download/v${PYROSCOPE_OTEL_VERSION}/pyroscope-otel.jar /agents/
+ADD https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v${OTEL_AGENT_VERSION}/opentelemetry-javaagent.jar /agents/
+ADD https://github.com/grafana/pyroscope-java/releases/download/v${PYROSCOPE_AGENT_VERSION}/pyroscope.jar /agents/
+ADD https://github.com/grafana/otel-profiling-java/releases/download/v${PYROSCOPE_OTEL_VERSION}/pyroscope-otel.jar /agents/
+RUN chmod -R a+rX /agents
 COPY --from=build /src/target/backend.jar /app/backend.jar
 USER 1000
 EXPOSE 8080

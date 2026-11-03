@@ -4,7 +4,7 @@ spring:
     virtual:
       enabled: true
   datasource:                  # only the catalog role opens connections (the pool starts lazily)
-    url: ${DB_URL:jdbc:postgresql://postgres:5432/shop}
+    url: ${DB_URL:jdbc:postgresql://postgres:5432/shop?ApplicationName=catalog}
     username: ${DB_USER:shop}
     password: ${DB_PASSWORD:shop}
     hikari:
