@@ -61,7 +61,7 @@ along explicitly. This is custom code: the agents only propagate the trace.
 
 | Where | How | Find it in Grafana |
 |---|---|---|
-| Browser | span `place order` with `order.id`; event `order_submitted`; header `X-Order-Id` + `baggage` (`frontend/src/orders.js`) | Tempo `{ span.order.id = "<id>" }`, Loki `{app_name="shop-frontend"} \|= "<id>"` |
+| Browser | span `place order` with `order.id`; event `order_submitted`; header `X-Order-Id` + `baggage` (`frontend/src/orders.js`) | Tempo `{ span.order.id = "<id>" }`, Loki `{service_name="shop-frontend"} \|= "<id>"` |
 | Backends | filter reads the header (or baggage) → span attribute, MDC, outgoing header (`backend/.../OrderId.java`) | Tempo as above; Loki `{service_name=~".+"} \| order_id="<id>"` |
 | Logs | MDC `order.id` → log attribute (`OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_CAPTURE_MDC_ATTRIBUTES`) | the Loki query above |
 | Database | the session's `application_name` is `catalog order.id=<id>` during the query (JDBC client info, `CatalogController.java`). PostgreSQL logs it; Alloy extracts it. Also visible live in `pg_stat_activity`. | the Loki query above |

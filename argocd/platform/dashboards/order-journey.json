@@ -131,7 +131,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{app_name=\"shop-frontend\"} |= \"$order_id\"",
+          "expr": "{service_name=\"shop-frontend\"} |= \"$order_id\"",
           "queryType": "range"
         }
       ]

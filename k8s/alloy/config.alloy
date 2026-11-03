@@ -133,8 +133,9 @@ pyroscope.write "platform" {
 // ---------------------------------------------------------------- Frontend (Grafana Faro)
 // Browser apps send to http(s)://faro.<domain>/<tenant>/collect. Traefik strips "/<tenant>" and forwards
 // to that tenant's receiver: faro.receiver doesn't pass request headers on, so the tenant is chosen by port.
-// Faro logs, events, exceptions and measurements -> Loki; the browser's spans -> Tempo. One receiver,
-// loki.write and Tempo exporter per tenant (ports: k8s/values/alloy.yaml, paths: argocd/platform ingress).
+// Faro logs, events, exceptions and measurements -> Loki (labels service_name = the Faro app name, kind =
+// log/event/exception/measurement); the browser's spans -> Tempo. One receiver, loki.process, loki.write and
+// Tempo exporter per tenant (ports: k8s/values/alloy.yaml, paths: argocd/platform ingress).
 faro.receiver "demo" {
   server {
     listen_address       = "0.0.0.0"
@@ -142,8 +143,18 @@ faro.receiver "demo" {
     cors_allowed_origins = ["*"]
   }
   output {
-    logs   = [loki.write.faro_demo.receiver]
+    logs   = [loki.process.faro_demo.receiver]
     traces = [otelcol.exporter.otlp.faro_demo.input]
+  }
+}
+
+loki.process "faro_demo" {
+  forward_to = [loki.write.faro_demo.receiver]
+  stage.logfmt {
+    mapping = { "service_name" = "app_name", "kind" = "" }
+  }
+  stage.labels {
+    values = { "service_name" = "", "kind" = "" }
   }
 }
 
@@ -169,8 +180,18 @@ faro.receiver "platform" {
     cors_allowed_origins = ["*"]
   }
   output {
-    logs   = [loki.write.faro_platform.receiver]
+    logs   = [loki.process.faro_platform.receiver]
     traces = [otelcol.exporter.otlp.faro_platform.input]
+  }
+}
+
+loki.process "faro_platform" {
+  forward_to = [loki.write.faro_platform.receiver]
+  stage.logfmt {
+    mapping = { "service_name" = "app_name", "kind" = "" }
+  }
+  stage.labels {
+    values = { "service_name" = "", "kind" = "" }
   }
 }
 

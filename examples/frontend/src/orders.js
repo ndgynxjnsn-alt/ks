@@ -14,7 +14,7 @@ function newOrderId() {
  * Places an order. Follow it by its id:
  *   Tempo:  { span.order.id = "<id>" }          (browser span "place order" and every backend server span)
  *   Loki:   {service_name=~".+"} | order_id="<id>"   (backends, PostgreSQL slow query log)
- *           {app_name="shop-frontend"} |= "<id>"      (this frontend)
+ *           {service_name="shop-frontend"} |= "<id>"      (this frontend)
  */
 export async function placeOrder(itemId) {
   const orderId = newOrderId();

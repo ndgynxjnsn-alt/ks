@@ -29,7 +29,7 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 
  argocd:  Argo CD  ── app of apps (argocd/root) ──▶ everything below
  lgtm:    loki ×3 · mimir ×3 · pyroscope ×3 · tempo ×1 · alloy (DaemonSet) · grafana ×2 · postgres ×3 (CloudNativePG)
- demo:    shop ×2 ──HTTP──▶ inventory ×2      (Spring Boot + OTel Java agent + Pyroscope)
+ demo:    shop ×1 ──HTTP──▶ inventory ×1      (Spring Boot + OTel Java agent + Pyroscope)
 ```
 
 | Component | Version | Mode / HA |
@@ -340,7 +340,8 @@ shows:
 
 Browser apps send Faro data to `http(s)://faro.<domain>/<tenant>/collect`. Alloy runs one `faro.receiver` per
 tenant (ports 12347 `demo`, 12348 `platform`); Traefik strips the `/<tenant>` prefix and picks the
-receiver by path. Each receiver writes to Loki and Tempo with its tenant. `faro.receiver` doesn't pass
+receiver by path. Each receiver writes to Loki (label `service_name` = the Faro app name, `kind` =
+log/event/exception/measurement) and to Tempo, with its tenant. `faro.receiver` doesn't pass
 request headers on, so the tenant can't come from `X-Scope-OrgID` the way it does for OTLP.
 Adding a tenant: a receiver/loki.write/exporter triple in `k8s/alloy/config.alloy`, a port in
 `k8s/values/alloy.yaml`, a path in `argocd/platform/templates/ingress.yaml`.

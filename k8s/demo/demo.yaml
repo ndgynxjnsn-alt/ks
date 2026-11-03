@@ -13,7 +13,7 @@ metadata:
   name: shop
   namespace: demo
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels: { app.kubernetes.io/name: shop }
   template:
@@ -47,7 +47,7 @@ metadata:
   name: inventory
   namespace: demo
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels: { app.kubernetes.io/name: inventory }
   template:
