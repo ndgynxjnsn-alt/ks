@@ -1,0 +1,29 @@
+# TopoLVM: local PersistentVolumes, carved as logical volumes from the volume group "topolvm" that
+# ansible/roles/topolvm creates on every node. Default StorageClass of the cluster ("topolvm"); a volume is
+# created on the node the pod is scheduled to (WaitForFirstConsumer, storage capacity tracking).
+# Plain tag instead of the chart's tag@index-digest: offline nodes only hold the amd64 image, whose digest
+# differs from the multi-arch index digest (same as Alloy's config reloader).
+image:
+  reference: 0.42.0
+
+lvmd:
+  deviceClasses:
+    - name: local
+      volume-group: topolvm
+      default: true
+      spare-gb: 0                  # the whole volume group is for PersistentVolumes
+
+storageClasses:
+  - name: topolvm
+    storageClass:
+      fsType: xfs
+      isDefaultClass: true
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true
+      reclaimPolicy: Delete
+
+snapshot:
+  enabled: false                   # would need the VolumeSnapshot CRDs
+
+controller:
+  replicaCount: 2

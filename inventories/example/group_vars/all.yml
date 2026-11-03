@@ -5,7 +5,11 @@
 vip: 10.0.10.10            # free IP in the servers' subnet: Kubernetes API (6443) + RKE2 join (9345)
 ingress_vip: 10.0.10.20    # free IP in the same subnet: all LGTM hostnames (Traefik)
 domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro]
+grafana_db_external: true   # Grafana's PostgreSQL on <ingress_vip>:5432 (postgres.<domain>), TLS + password
+
+# ---------------------------------------------------------------- storage
+topolvm_disk: /dev/disk/by-id/CHANGE-ME   # whole empty disk per node for TopoLVM (not used by Garage)
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
 # The cluster must reach both: this repository (e.g. a GitLab mirror) and a Helm repository holding

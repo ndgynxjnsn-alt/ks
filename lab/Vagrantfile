@@ -1,5 +1,6 @@
 # -*- mode: ruby -*-
-# LAB ONLY: three bare servers simulating the on-premise machines, each with 5 small data disks for Garage S3.
+# LAB ONLY: three bare servers simulating the on-premise machines, each with 5 data disks for Garage S3 and one
+# disk for TopoLVM (local PersistentVolumes).
 # Nothing is provisioned here: Ansible (ansible/site.yml -i lab/inventory) sets them up. Both libvirt networks are isolated (no NAT), so the VMs have
 # no internet access; the host reaches them on 192.168.56.0/24.
 require "securerandom"
@@ -23,12 +24,13 @@ Vagrant.configure("2") do |config|
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
   config.vm.provider :libvirt do |lv|
-    lv.memory = 7168
+    lv.memory = 5120
     lv.cpus = 4
     lv.cpu_mode = "host-passthrough"
     lv.default_prefix = "lgtm_"  # libvirt domain names lgtm_lgtm1 ... (independent of the directory name)
     lv.machine_virtual_size = 40 # GB root disk, grown by cloud-init
-    5.times { lv.storage :file, size: "100M", bus: "virtio" } # /dev/vdb .. /dev/vdf
+    5.times { lv.storage :file, size: "1G", bus: "virtio" }   # Garage: /dev/vdb .. /dev/vdf (sparse files)
+    lv.storage :file, size: "20G", bus: "virtio", serial: "topolvm" # TopoLVM: /dev/disk/by-id/virtio-topolvm
     # Vagrant's own SSH/DHCP network, isolated instead of NAT.
     lv.management_network_name = "lgtm-mgmt"
     lv.management_network_address = "192.168.57.0/24"

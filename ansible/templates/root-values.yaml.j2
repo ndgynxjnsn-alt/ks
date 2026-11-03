@@ -28,6 +28,10 @@ apps:
     path: certs
     namespace: cert-manager
     wave: -1
+  topolvm:                        # local PersistentVolumes (LVM on every node), default StorageClass
+    version: "{{ charts.topolvm.version }}"
+    namespace: topolvm-system
+    wave: -2
   platform:
     path: argocd/platform
     wave: -2
@@ -57,6 +61,10 @@ apps:
     version: "{{ charts.grafana.version }}"
     wave: 1
     values: {{ lookup('template', 'grafana-values.yaml.j2') | from_yaml | to_json }}
+  headlamp:                       # Kubernetes web UI (https://headlamp.<domain>)
+    version: "{{ charts.headlamp.version }}"
+    namespace: headlamp
+    wave: 1
   demo:
     path: k8s/demo
     namespace: demo

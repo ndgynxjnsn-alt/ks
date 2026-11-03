@@ -15,10 +15,10 @@
       changed_when: "'REMOVED' in sudo_rs.stdout"
       no_log: true
 
-- name: Garage S3 on every node
+- name: LVM volume group for TopoLVM, Garage S3 on the remaining disks
   hosts: nodes
   become: true
-  roles: [garage]
+  roles: [topolvm, garage]
 
 - name: OTLP/JSON import directories
   hosts: nodes

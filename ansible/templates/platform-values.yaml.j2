@@ -16,3 +16,4 @@ grafanaDB:
   image: "{{ grafana_db_image }}"
   instances: 3
   size: 1Gi
+  external: {{ grafana_db_external | default(false) | to_json }}

@@ -1,0 +1,18 @@
+# The LVM volume group TopoLVM provisions PersistentVolumes from: one whole disk per node (topolvm_disk, e.g.
+# /dev/disk/by-id/...). Created once and kept on re-runs; Garage leaves this disk alone (topolvm_disk_name).
+- name: Resolve the TopoLVM disk
+  ansible.builtin.stat: { path: "{{ topolvm_disk }}", follow: true }
+  register: topolvm_disk_stat
+
+- name: Expect the TopoLVM disk
+  ansible.builtin.assert:
+    that: topolvm_disk_stat.stat.exists and topolvm_disk_stat.stat.isblk
+    fail_msg: "topolvm_disk {{ topolvm_disk }} is not a block device"
+    quiet: true
+
+- name: Kernel name of the TopoLVM disk (excluded from Garage)
+  ansible.builtin.set_fact:
+    topolvm_disk_name: "{{ (topolvm_disk_stat.stat.lnk_source | default(topolvm_disk)) | basename }}"
+
+- name: Volume group
+  community.general.lvg: { vg: "{{ topolvm_vg }}", pvs: ["/dev/{{ topolvm_disk_name }}"] }

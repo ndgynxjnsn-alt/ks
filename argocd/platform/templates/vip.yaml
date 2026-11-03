@@ -15,6 +15,9 @@ spec:
   ports:
     - { name: web, port: 80, targetPort: web }
     - { name: websecure, port: 443, targetPort: websecure }
+    {{- if .Values.grafanaDB.external }}
+    - { name: postgres, port: 5432, targetPort: postgres }   # Traefik TCP entrypoint -> grafana-db (grafana-db.yaml)
+    {{- end }}
 ---
 # Garage runs on the nodes, outside Kubernetes. This hostNetwork DaemonSet (a pause container, one pod per node)
 # gives the Service "garage" endpoints with the node IPs, and its readiness probe on Garage's S3 port takes a

@@ -1,4 +1,5 @@
-# Runs once: connects all nodes, assigns the initial layout, creates the access key and the buckets.
+# Runs once: connects all nodes, assigns the initial layout (capacity = sum of the node's data disks), creates the
+# access key and the buckets.
 - name: Connect all Garage nodes
   ansible.builtin.command: garage -c /etc/garage.toml node connect {{ hostvars[item].garage_node_id.stdout }}
   loop: "{{ ansible_play_hosts }}"
@@ -9,10 +10,10 @@
   register: garage_layout
   changed_when: false
 
-- name: Assign initial layout (one zone, equal capacity)
+- name: Assign initial layout (one zone)
   ansible.builtin.command: >-
     garage -c /etc/garage.toml layout assign {{ hostvars[item].garage_node_id.stdout.split('@')[0] }}
-    -z dc1 -c {{ garage_node_capacity }} -t {{ item }}
+    -z dc1 -c {{ hostvars[item].garage_disk_mb | sum }}M -t {{ item }}
   loop: "{{ ansible_play_hosts }}"
   when: "'No nodes currently have a role' in garage_layout.stdout"
   changed_when: true

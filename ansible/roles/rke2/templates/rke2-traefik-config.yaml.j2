@@ -1,6 +1,8 @@
 # {{ ansible_managed }}
 # RKE2's bundled Traefik: publish the ingress VIP (Service kube-system/vip-ingress, kube-vip) into the status of
 # every Ingress it serves. Argo CD treats an Ingress without a load balancer address as "Progressing".
+# TCP entrypoint "postgres" (5432): Grafana's PostgreSQL from outside (argocd/platform/templates/grafana-db.yaml);
+# the ingress VIP Service publishes it only when grafana_db_external is set.
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -13,3 +15,8 @@ spec:
         publishedService:
           enabled: true
           pathOverride: kube-system/vip-ingress
+    ports:
+      postgres:
+        port: 5432
+        expose: { default: false }   # the Service "vip-ingress" (argocd/platform) publishes it
+        protocol: TCP

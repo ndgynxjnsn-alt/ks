@@ -1,7 +1,9 @@
 {{- /* Every hostname <name>.<domain> twice: plain http on Traefik's "web" entrypoint, and https on
        "websecure" with its own certificate, which cert-manager requests from the company CA (annotation) and
        keeps renewed. (One Ingress with a tls: block would make Traefik serve that host on https only.)
-       Only names listed in .Values.hosts are published. */ -}}
+       Only names listed in .Values.hosts are published.
+       faro: one path per tenant (/<tenant>/collect) to that tenant's Faro receiver in Alloy; the middleware
+       below strips the /<tenant> prefix. */ -}}
 {{- $routes := dict
   "grafana"   (list (list "/" "grafana" 80 "lgtm"))
   "loki"      (list (list "/" "loki" 3100 "lgtm"))
@@ -11,6 +13,8 @@
   "alloy"     (list (list "/v1/" "alloy" 4318 "lgtm") (list "/ingest" "alloy" 9999 "lgtm") (list "/" "alloy" 12345 "lgtm"))
   "garage"    (list (list "/" "garage" 3900 "lgtm"))
   "argocd"    (list (list "/" "argocd-server" 80 "argocd"))
+  "headlamp"  (list (list "/" "headlamp" 80 "headlamp"))
+  "faro"      (list (list "/demo/" "alloy" 12347 "lgtm") (list "/platform/" "alloy" 12348 "lgtm"))
 }}
 {{- range $name := .Values.hosts }}
 {{- $paths := get $routes $name }}
@@ -24,6 +28,9 @@ metadata:
   namespace: {{ index (first $paths) 3 }}
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: {{ ternary "web" "websecure" (eq $scheme "http") }}
+    {{- if eq $name "faro" }}
+    traefik.ingress.kubernetes.io/router.middlewares: lgtm-faro-tenant@kubernetescrd
+    {{- end }}
     {{- if eq $scheme "https" }}
     cert-manager.io/cluster-issuer: {{ $.Values.tls.issuer }}
     {{- end }}
@@ -44,4 +51,16 @@ spec:
             backend: { service: { name: {{ index . 1 }}, port: { number: {{ index . 2 }} } } }
           {{- end }}
 {{- end }}
+{{- end }}
+{{- if has "faro" .Values.hosts }}
+---
+# /<tenant>/collect -> /collect (the path of faro.receiver)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: faro-tenant
+  namespace: lgtm
+spec:
+  stripPrefixRegex:
+    regex: ["^/[^/]+"]
 {{- end }}

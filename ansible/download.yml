@@ -138,6 +138,8 @@
               -f $v/trust-manager.yaml
             $helm template cnpg $c/cloudnative-pg-{{ charts['cloudnative-pg'].version }}.tgz -f $v/cloudnative-pg.yaml
             $helm template argocd $c/argo-cd-{{ charts['argo-cd'].version }}.tgz -f $v/argocd.yaml
+            $helm template topolvm $c/topolvm-{{ charts.topolvm.version }}.tgz -f $v/topolvm.yaml
+            $helm template headlamp $c/headlamp-{{ charts.headlamp.version }}.tgz -f $v/headlamp.yaml
             $helm template ksm $c/kube-state-metrics-{{ charts['kube-state-metrics'].version }}.tgz \
               -f $v/kube-state-metrics.yaml
           } 2>/dev/null | grep -oP '^\s*(- )?image:\s*["'"'"']?\K[^"'"'"'\s]+' | sort -u

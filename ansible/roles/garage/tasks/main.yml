@@ -1,5 +1,6 @@
 # Data disks are found dynamically: every whole disk without partitions or holders (the root disk has
-# partitions), sorted by name and numbered 1..N -> label garageN -> /srv/garage/dataN.
+# partitions), except the TopoLVM disk (topolvm_disk), sorted by name and numbered 1..N -> label garageN ->
+# /srv/garage/dataN. Garage's capacity per disk is 90% of its size.
 # Disks that report a size of 0 bytes (failed or missing media) are skipped, so a dead drive doesn't stop
 # the node from coming up; Garage's replication covers the missing capacity.
 #
@@ -10,11 +11,21 @@
     garage_disks: >-
       {{ ansible_facts.devices | dict2items
          | rejectattr('key', 'match', garage_disk_exclude)
+         | rejectattr('key', 'equalto', topolvm_disk_name | default(''))
          | selectattr('value.partitions', 'equalto', {})
          | selectattr('value.holders', 'equalto', [])
          | rejectattr('value.size', 'equalto', '0.00 Bytes')
          | rejectattr('value.sectors', 'in', ['0', 0])
          | map(attribute='key') | sort }}
+
+- name: Capacity per data disk in MB (90% of the disk)
+  ansible.builtin.set_fact:
+    garage_disk_mb: >-
+      {%- set mb = [] -%}
+      {%- for d in garage_disks -%}
+      {%-   set dev = ansible_facts.devices[d] -%}
+      {%-   set _ = mb.append((dev.sectors | int * dev.sectorsize | int * 0.9 / 1048576) | int) -%}
+      {%- endfor -%}{{ mb }}
 
 - name: Expect at least one data disk
   ansible.builtin.assert:

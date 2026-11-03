@@ -3,11 +3,12 @@ replication_factor = 3
 metadata_dir = "/var/lib/garage/meta"
 data_dir = [
 {% for d in garage_disks %}
-  { path = "/srv/garage/data{{ loop.index }}", capacity = "{{ garage_disk_capacity }}" },
+  { path = "/srv/garage/data{{ loop.index }}", capacity = "{{ garage_disk_mb[loop.index0] }}M" },
 {% endfor %}
 ]
 db_engine = "lmdb"
 compression_level = 1
+block_ram_buffer_max = "64MiB"   # RAM for blocks waiting to be written (default 256 MiB)
 
 rpc_secret = "{{ garage_rpc_secret }}"
 rpc_bind_addr = "[::]:3901"

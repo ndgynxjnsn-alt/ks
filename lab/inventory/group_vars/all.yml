@@ -11,7 +11,14 @@ ingress_vip: 192.168.56.20    # every LGTM hostname -> Traefik, which routes by 
 # DNS: *.<domain> -> ingress_vip (lab: BIND in lab/external, or /etc/hosts).
 domain: lgtm.company.org
 # Hostnames served on the ingress VIP (backends: ansible/templates/ingress.yaml.j2). Remove one to unpublish it.
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro]
+
+# Grafana's PostgreSQL (CloudNativePG) on port 5432 of the ingress VIP, e.g. postgres.<domain>:5432 (TLS, scram).
+grafana_db_external: true
+
+# ---------------------------------------------------------------- storage
+# Whole disk per node for the TopoLVM volume group (default StorageClass). Garage uses the other empty disks.
+topolvm_disk: /dev/disk/by-id/virtio-topolvm      # serial "topolvm" (lab/Vagrantfile)
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
 # Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts). Lab: both on

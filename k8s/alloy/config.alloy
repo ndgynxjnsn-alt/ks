@@ -2,6 +2,7 @@
 // (k8s/alloy/kustomization.yaml); Alloy's config reloader picks up changes without a restart.
 //   OTLP (traces, metrics, logs) on 4317/4318 -> Tempo / Mimir / Loki, tenant = the sender's X-Scope-OrgID header
 //   Pyroscope push API on 9999            -> Pyroscope, tenant = the profile's "tenant" label
+//   Grafana Faro (browser apps) on 12347 (tenant demo), 12348 (platform) -> Loki / Tempo
 //   Pod logs of every node (/var/log/pods) -> Loki, tenant "platform"
 //   OTLP/JSON files in /var/lib/otel-import/<tenant>/ -> the "import" receiver (sidecar otlp-json-import.sh)
 //   Cluster metrics of this node (node, kubelet/cAdvisor, etcd, Garage, component pods) -> Mimir, tenant "platform"
@@ -126,6 +127,65 @@ pyroscope.write "platform" {
   endpoint {
     url     = "http://pyroscope.lgtm.svc:4040"
     headers = { "X-Scope-OrgID" = "platform" }
+  }
+}
+
+// ---------------------------------------------------------------- Frontend (Grafana Faro)
+// Browser apps send to http(s)://faro.<domain>/<tenant>/collect. Traefik strips "/<tenant>" and forwards
+// to that tenant's receiver: faro.receiver doesn't pass request headers on, so the tenant is chosen by port.
+// Faro logs, events, exceptions and measurements -> Loki; the browser's spans -> Tempo. One receiver,
+// loki.write and Tempo exporter per tenant (ports: k8s/values/alloy.yaml, paths: argocd/platform ingress).
+faro.receiver "demo" {
+  server {
+    listen_address       = "0.0.0.0"
+    listen_port          = 12347
+    cors_allowed_origins = ["*"]
+  }
+  output {
+    logs   = [loki.write.faro_demo.receiver]
+    traces = [otelcol.exporter.otlp.faro_demo.input]
+  }
+}
+
+loki.write "faro_demo" {
+  endpoint {
+    url       = "http://loki.lgtm.svc:3100/loki/api/v1/push"
+    tenant_id = "demo"
+  }
+}
+
+otelcol.exporter.otlp "faro_demo" {
+  client {
+    endpoint = "tempo.lgtm.svc:4317"
+    tls { insecure = true }
+    headers  = { "X-Scope-OrgID" = "demo" }
+  }
+}
+
+faro.receiver "platform" {
+  server {
+    listen_address       = "0.0.0.0"
+    listen_port          = 12348
+    cors_allowed_origins = ["*"]
+  }
+  output {
+    logs   = [loki.write.faro_platform.receiver]
+    traces = [otelcol.exporter.otlp.faro_platform.input]
+  }
+}
+
+loki.write "faro_platform" {
+  endpoint {
+    url       = "http://loki.lgtm.svc:3100/loki/api/v1/push"
+    tenant_id = "platform"
+  }
+}
+
+otelcol.exporter.otlp "faro_platform" {
+  client {
+    endpoint = "tempo.lgtm.svc:4317"
+    tls { insecure = true }
+    headers  = { "X-Scope-OrgID" = "platform" }
   }
 }
 

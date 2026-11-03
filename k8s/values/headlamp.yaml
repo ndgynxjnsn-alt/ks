@@ -1,0 +1,8 @@
+# Headlamp: Kubernetes web UI at https://headlamp.<domain> (Ingress from argocd/platform).
+# Log in with a ServiceAccount token, e.g. the chart's cluster-admin account:
+#   kubectl -n headlamp create token headlamp
+fullnameOverride: headlamp
+
+resources:
+  requests: { cpu: 10m, memory: 64Mi }
+  limits: { memory: 256Mi }
