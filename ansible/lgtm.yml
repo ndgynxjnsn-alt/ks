@@ -11,9 +11,10 @@
     # values of the root app, incl. the platform and Grafana overlays (ansible/templates/*-values.yaml.j2)
     root_values: "{{ lookup('template', 'templates/root-values.yaml.j2') | from_yaml }}"
 
-    # Ansible waits for the root app and every app not marked "wait: false" (those are only reported)
+    # Ansible waits for every app not marked "wait: false" (those are only reported). Not for the root app "lgtm":
+    # its health includes its children's, so a "wait: false" app that is Degraded would block it.
     waited_apps: >-
-      {{ ['lgtm'] + (root_values.apps | dict2items | rejectattr('value.wait', 'defined') | map(attribute='key') | list)
+      {{ (root_values.apps | dict2items | rejectattr('value.wait', 'defined') | map(attribute='key') | list)
          + (root_values.apps | dict2items | selectattr('value.wait', 'defined') | selectattr('value.wait')
             | map(attribute='key') | list) }}
     # "Sync/Health: message" per Application, from the last "kubectl get applications" (argo_apps)
