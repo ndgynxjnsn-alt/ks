@@ -62,8 +62,6 @@ grafana.ini:
   feature_toggles:            # individual entries (feature_toggles.enable is deprecated)
     traceToProfiles: true
     tracesEmbeddedFlameGraph: true
-    provisioning: true          # Git Sync (dashboards and folders from Git)
-    kubernetesDashboards: true
 
 # Trusted CAs (certs/ + public CAs + the site's CAs, built by trust-manager), e.g. for Git Sync's https Git server.
 extraConfigmapMounts:

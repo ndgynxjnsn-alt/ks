@@ -5,6 +5,12 @@ grafana.ini:
   server:
     domain: "grafana.{{ domain }}"
     root_url: "https://grafana.{{ domain }}"   # absolute links; the UI also works on http
+{% if grafana_git_sync is defined %}
+  # Git Sync (ansible/tasks/grafana-git-sync.yml). Grafana refuses Git servers on private addresses (SSRF
+  # protection) unless they are allowed here.
+  provisioning:
+    allowed_git_urls: "{{ grafana_git_sync.url | urlsplit('netloc') }}"
+{% endif %}
 {% if oauth.enabled %}
   # Login via the IdP. Group -> Grafana org/role:
   #   grafana-admins -> Admin in every org + Grafana server admin;  tenant-<name> -> Editor in org <name>
