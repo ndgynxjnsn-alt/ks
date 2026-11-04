@@ -1,0 +1,47 @@
+# {{ ansible_managed }}
+# Site-specific Argo CD values, merged over k8s/values/argocd.yaml by ansible/lgtm.yml.
+configs:
+  cm:
+    url: "https://argocd.{{ domain }}"
+{% if oauth.enabled and oauth.argocd_client_id is defined %}
+    # Login via the IdP with its own OAuth client (not Grafana's). The local "admin" stays as the safety valve.
+    # The client secret comes from Secret argocd-oidc (created by lgtm.yml, label part-of: argocd).
+    oidc.config: |
+      name: {{ oauth.name | default('Keycloak') }}
+      issuer: {{ oauth.issuer }}
+      clientID: {{ oauth.argocd_client_id }}
+      clientSecret: $argocd-oidc:client-secret
+      requestedScopes: [openid, profile, email, groups]
+      enablePKCEAuthentication: true
+    # login page: SSO button first, local login de-emphasised (k8s/argocd/login.css, ConfigMap below)
+    ui.cssurl: ./custom/login.css
+  rbac:
+    scopes: "[groups]"
+    policy.default: ""          # IdP users outside the groups below see nothing
+    policy.csv: |
+{% for group in oauth.argocd_admin_groups | default([]) %}
+      g, {{ group }}, role:admin
+{% endfor %}
+{% for group in oauth.argocd_readonly_groups | default([]) %}
+      g, {{ group }}, role:readonly
+{% endfor %}
+
+server:
+  volumes:
+    - { name: custom-ui, configMap: { name: argocd-custom-ui } }
+  volumeMounts:
+    - { name: custom-ui, mountPath: /shared/app/custom, readOnly: true }
+
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata: { name: argocd-custom-ui }
+    data:
+      login.css: {{ lookup('file', repo_dir + '/k8s/argocd/login.css') | to_json }}
+{%   if oauth.host_ip is defined %}
+
+global:
+  hostAliases:      # no DNS for the IdP (lab)
+    - { ip: "{{ oauth.host_ip }}", hostnames: ["{{ oauth.hostname }}"] }
+{%   endif %}
+{% endif %}

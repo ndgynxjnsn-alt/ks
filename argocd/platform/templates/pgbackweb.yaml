@@ -1,0 +1,44 @@
+{{- /* PG Back Web (https://pgbackweb.<domain>): web UI for pg_dump backups of Grafana's database into the Garage
+       bucket "pgbackweb" and for restoring one of them. Its own data (users, the database and S3 credentials it
+       stores encrypted with Secret pgbackweb) lives in database "pgbackweb" of grafana-db (grafana-db.yaml).
+       Login, database, destination and the daily backup are set up by ansible/lgtm.yml. */ -}}
+{{- if has "pgbackweb" .Values.hosts }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbackweb
+  namespace: lgtm
+spec:
+  replicas: 1                      # schedules backups itself: one instance only
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: pgbackweb }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: pgbackweb }
+    spec:
+      containers:
+        - name: pgbackweb
+          image: {{ .Values.pgbackweb.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: pgbackweb-db, key: password } } }
+            - { name: PBW_ENCRYPTION_KEY, valueFrom: { secretKeyRef: { name: pgbackweb, key: encryption-key } } }
+            - name: PBW_POSTGRES_CONN_STRING
+              value: postgresql://pgbackweb:$(DB_PASSWORD)@grafana-db-rw.lgtm.svc:5432/pgbackweb?sslmode=require
+          ports: [{ name: http, containerPort: 8085 }]
+          readinessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 512Mi }    # pg_dump of a large database
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbackweb
+  namespace: lgtm
+spec:
+  selector: { app.kubernetes.io/name: pgbackweb }
+  ports: [{ name: http, port: 8085, targetPort: http }]
+{{- end }}

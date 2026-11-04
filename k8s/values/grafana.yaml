@@ -1,12 +1,14 @@
 # Grafana: 2 replicas backed by PostgreSQL (CloudNativePG cluster grafana-db), so users, orgs, sessions and
-# saved dashboards are shared and survive pod/node failures; provisioned content comes from this chart.
-# The image has the Drilldown apps baked in (built by ansible/download.yml), so nothing is downloaded at start.
+# saved dashboards are shared and survive pod/node failures. Dashboards come from Grafana's own Git repository
+# (Git Sync, set up by ansible/lgtm.yml), not from this chart.
+# The image has the Drilldown apps baked in (built by ansible/download.yml, pulled from the artifact repository
+# like every image), so nothing is downloaded at start.
 fullnameOverride: grafana
 image:
   registry: lgtm.local
   repository: grafana
   tag: 13.2.4-drilldown
-  pullPolicy: Never
+  pullPolicy: IfNotPresent
 replicas: 2
 headlessService: true    # peer discovery for unified alerting HA (ha_peers below)
 topologySpreadConstraints:
@@ -60,19 +62,14 @@ grafana.ini:
   feature_toggles:            # individual entries (feature_toggles.enable is deprecated)
     traceToProfiles: true
     tracesEmbeddedFlameGraph: true
+    provisioning: true          # Git Sync (dashboards and folders from Git)
+    kubernetesDashboards: true
 
-# Dashboards from the ConfigMap "grafana-dashboards" (k8s/dashboards/*.json, created by ansible/lgtm.yml).
-dashboardProviders:
-  dashboardproviders.yaml:
-    apiVersion: 1
-    providers:
-      - name: lgtm
-        folder: LGTM
-        type: file
-        disableDeletion: true
-        options: { path: /var/lib/grafana/dashboards/lgtm }
-dashboardsConfigMaps:
-  lgtm: grafana-dashboards
+# Trusted CAs (certs/ + public CAs + the site's CAs, built by trust-manager), e.g. for Git Sync's https Git server.
+extraConfigmapMounts:
+  - { name: company-ca, mountPath: /etc/ssl/company, configMap: company-ca-bundle, readOnly: true, optional: true }
+env:
+  SSL_CERT_FILE: /etc/ssl/company/ca-certificates.crt
 
 # Datasources are rendered by ansible/lgtm.yml from ansible/templates/grafana-datasources.yaml.j2:
 # the Main org gets them via provisioning (all tenants), every tenant org via the Grafana API.

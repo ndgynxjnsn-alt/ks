@@ -20,6 +20,16 @@
   become: true
   roles: [topolvm, garage]
 
+# Only with --tags buckets: adds new buckets of garage_buckets to a running Garage (the play above rebuilds it)
+- name: Garage buckets
+  hosts: nodes[0]
+  become: true
+  gather_facts: false
+  tags: [never, buckets]
+  tasks:
+    - name: Create missing buckets
+      ansible.builtin.include_role: { name: garage, tasks_from: buckets }
+
 - name: OTLP/JSON import directories
   hosts: nodes
   become: true

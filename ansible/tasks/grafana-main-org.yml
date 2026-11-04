@@ -37,3 +37,8 @@
   loop: "{{ grafana_orgs.json | selectattr('name', 'equalto', 'Main Org.') | rejectattr('id', 'equalto', 1) | list }}"
   loop_control: { label: "{{ item.id }}" }
   changed_when: true
+
+- name: Dashboards of the Main org from Git
+  ansible.builtin.include_tasks: grafana-git-sync.yml
+  vars: { git_sync_org_id: 1, git_sync_dir: main }
+  when: grafana_git_sync is defined

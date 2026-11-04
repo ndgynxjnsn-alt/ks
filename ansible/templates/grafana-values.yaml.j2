@@ -14,6 +14,9 @@ grafana.ini:
   auth.generic_oauth:
     enabled: true
     name: Keycloak
+    # Straight to the IdP instead of Grafana's login form. The form stays as the safety valve for the local
+    # admin (IdP down, broken mapping): https://grafana.<domain>/login?disableAutoLogin=true
+    auto_login: true
     allow_sign_up: true
     client_id: "{{ oauth.client_id }}"
     scopes: openid email profile

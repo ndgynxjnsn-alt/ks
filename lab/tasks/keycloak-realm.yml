@@ -1,0 +1,83 @@
+# Keycloak imports the realm file only when the realm doesn't exist yet. This keeps an existing realm in step
+# with lab/templates/keycloak-realm.json.j2 through the admin API: clients are overwritten (new clients,
+# changed redirect URIs/secrets), missing groups and users are added (existing ones are kept, so their ids and
+# the logins linked to them stay), and every user is put into the groups the inventory lists for it.
+- name: Keycloak admin API
+  vars:
+    kc: http://127.0.0.1:8080
+    realm: "{{ lookup('template', 'templates/keycloak-realm.json.j2') | from_json }}"
+  block:
+    - name: Wait for Keycloak
+      ansible.builtin.uri: { url: "{{ kc }}/realms/master" }
+      register: kc_up
+      until: kc_up.status == 200
+      retries: 60
+      delay: 5
+
+    - name: Admin token
+      ansible.builtin.uri:
+        url: "{{ kc }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: password
+          client_id: admin-cli
+          username: admin
+          password: "{{ keycloak_admin_password }}"
+      register: kc_token
+      no_log: true
+
+    # (partialImport can't skip existing groups - "Duplicate resource error" - so groups are created one by one)
+    - name: Groups (only missing ones)
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/groups"
+        method: POST
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+        body_format: json
+        body: "{{ item }}"
+        status_code: [201, 409]
+      loop: "{{ realm.groups }}"
+      loop_control: { label: "{{ item.name }}" }
+      register: kc_group_add
+      changed_when: kc_group_add.status == 201
+
+    - name: Clients (overwritten), users (only missing ones; memberships below)
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/partialImport"
+        method: POST
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+        body_format: json
+        body: "{{ {'ifResourceExists': item.policy} | combine(item.resources) }}"
+      loop:
+        - { policy: OVERWRITE, resources: { clients: "{{ realm.clients }}" } }
+        - policy: SKIP
+          resources: { users: "{{ realm.users | map('ansible.utils.remove_keys', target=['groups']) }}" }
+      loop_control: { label: "{{ item.resources.keys() | join(', ') }}" }
+      register: kc_import
+      changed_when: kc_import.json.added | int > 0
+      no_log: true
+
+    - name: Groups of the realm
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/groups"
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+      register: kc_groups
+
+    - name: Users of the realm
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/users?max=1000"
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+      register: kc_users
+
+    - name: Group memberships from the inventory
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/users/{{ user_id }}/groups/{{ group_id }}"
+        method: PUT
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+        status_code: 204
+      vars:
+        user_id: "{{ (kc_users.json | selectattr('username', 'equalto', item.0.name) | first).id }}"
+        group_id: "{{ (kc_groups.json | selectattr('name', 'equalto', item.1) | first).id }}"
+      loop: "{{ keycloak_users | subelements('groups') }}"
+      loop_control: { label: "{{ item.0.name }} -> {{ item.1 }}" }
+      changed_when: false    # PUT is idempotent; Keycloak doesn't tell whether it was a member already

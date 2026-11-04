@@ -1,0 +1,167 @@
+# Sonatype Nexus (lab/external/docker-compose.yml) as the company's artifact repository, set up via its REST API:
+#   lgtm-docker  Docker hosted repository, registry API on its own connector (container 8082, host 8092)
+#   lgtm-helm    Helm hosted repository   http://<host>:8091/repository/lgtm-helm/
+# Anonymous read (the cluster pulls without credentials); user "lgtm" (role lgtm-publisher) may push to both.
+- name: Nexus REST API
+  vars:
+    nexus_api: "http://127.0.0.1:8091/service/rest/v1"
+    nexus_admin_password: >-
+      {{ lookup('password', secrets_dir + '/nexus_admin_password chars=ascii_letters,digits length=20') }}
+  block:
+    - name: Wait for Nexus (first start takes a minute or two)
+      ansible.builtin.uri: { url: "{{ nexus_api }}/status/writable" }
+      register: nexus_status
+      until: nexus_status.status == 200
+      retries: 60
+      delay: 5
+
+    - name: Admin login with the lab password
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/users?userId=admin"
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 401]
+      register: nexus_admin
+
+    # A fresh Nexus writes a random admin password to /nexus-data/admin.password
+    - name: Initial admin password
+      ansible.builtin.command:
+        argv: [docker, compose, exec, -T, nexus, cat, /nexus-data/admin.password]
+        chdir: "{{ repo_dir }}/lab/external"
+      become: "{{ lab_docker_sudo | default(false) }}"
+      register: nexus_initial
+      changed_when: false
+      no_log: true
+      when: nexus_admin.status == 401
+
+    - name: Set the lab admin password
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/users/admin/change-password"
+        method: PUT
+        user: admin
+        password: "{{ nexus_initial.stdout }}"
+        force_basic_auth: true
+        headers: { Content-Type: text/plain }
+        body: "{{ nexus_admin_password }}"
+        status_code: 204
+      changed_when: true
+      no_log: true
+      when: nexus_admin.status == 401
+
+    - name: EULA status
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/system/eula"
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: nexus_eula
+
+    - name: Accept the Community Edition EULA (required before first use)
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/system/eula"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: "{{ nexus_eula.json | combine({'accepted': true}) }}"
+        status_code: [200, 204]
+      changed_when: true
+      when: nexus_eula.status == 200 and not nexus_eula.json.accepted | default(true)
+
+    - name: Realms (Docker Bearer Token realm is needed for docker login and anonymous pulls)
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/realms/active"
+        method: PUT
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: [NexusAuthenticatingRealm, DockerToken]
+        status_code: 204
+      changed_when: false
+
+    - name: Anonymous read access
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/anonymous"
+        method: PUT
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: { enabled: true, userId: anonymous, realmName: NexusAuthorizingRealm }
+      changed_when: false
+
+    - name: Existing repositories
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/repositories"
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+      register: nexus_repos
+
+    - name: Repositories lgtm-docker and lgtm-helm
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/repositories/{{ item.format }}/hosted"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: "{{ item.body | combine({'name': item.name, 'online': true}) }}"
+        status_code: 201
+      changed_when: true
+      when: item.name not in nexus_repos.json | map(attribute='name')
+      loop:
+        - name: lgtm-docker
+          format: docker
+          body:
+            # tags are overwritten on re-push (the demo app keeps its tag)
+            storage: { blobStoreName: default, strictContentTypeValidation: true, writePolicy: allow }
+            docker: { v1Enabled: false, forceBasicAuth: false, httpPort: 8082 }
+        - name: lgtm-helm
+          format: helm
+          body:
+            storage: { blobStoreName: default, strictContentTypeValidation: true, writePolicy: allow_once }
+      loop_control: { label: "{{ item.name }}" }
+
+    - name: Role lgtm-publisher (push to both repositories)
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/roles"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          id: lgtm-publisher
+          name: lgtm-publisher
+          description: Push images and charts of the LGTM stack
+          privileges: [nx-repository-view-docker-lgtm-docker-*, nx-repository-view-helm-lgtm-helm-*]
+          roles: []
+        status_code: [200, 400]
+      register: nexus_role
+      changed_when: nexus_role.status == 200
+
+    - name: User lgtm
+      ansible.builtin.uri:
+        url: "{{ nexus_api }}/security/users"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          userId: "{{ registry.publish.username }}"
+          firstName: LGTM
+          lastName: Publisher
+          emailAddress: "{{ registry.publish.username }}@example.corp"
+          password: "{{ registry.publish.password }}"
+          status: active
+          roles: [lgtm-publisher]
+        status_code: [200, 400]
+      register: nexus_user
+      changed_when: nexus_user.status == 200
+      no_log: true

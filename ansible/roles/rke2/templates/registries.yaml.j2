@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# containerd pulls every image from the artifact repository (inventory: registry): an image
+# <source registry>/<path> is looked up as <registry.host>/<source registry>/<path> (ansible/publish.yml).
+{% set endpoint = ('http://' if registry.insecure | default(false) else 'https://') ~ registry.host %}
+mirrors:
+{% for source in rke2_registry_sources %}
+  "{{ source }}":
+    endpoint: ["{{ endpoint }}"]
+    rewrite: { "^(.*)$": "{{ source }}/$1" }
+{% endfor %}
+{% if registry.username is defined or registry.ca_file is defined %}
+configs:
+  "{{ registry.host }}":
+{%   if registry.username is defined %}
+    auth: { username: "{{ registry.username }}", password: "{{ registry.password }}" }
+{%   endif %}
+{%   if registry.ca_file is defined %}
+    tls: { ca_file: /etc/rancher/rke2/registry-ca.crt }
+{%   endif %}
+{% endif %}

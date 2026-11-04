@@ -1,0 +1,5 @@
+# CloudNativePG's Barman Cloud plugin (in the operator's namespace): continuous WAL archiving and base backups of
+# Grafana's PostgreSQL to Garage S3 (ObjectStore + ScheduledBackup in argocd/platform/templates/grafana-db.yaml).
+resources:
+  requests: { cpu: 10m, memory: 64Mi }
+  limits: { memory: 256Mi }

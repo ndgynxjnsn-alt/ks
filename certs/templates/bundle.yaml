@@ -1,5 +1,6 @@
 {{- /* The CA certificates of this folder (*.pem, *.crt) as a ConfigMap in trust-manager's trust namespace, and
-       a Bundle that combines them with the public CAs into ConfigMap company-ca-bundle in every namespace. */ -}}
+       a Bundle that combines them with the public CAs and the site's own CAs (.Values.siteCAs, from the
+       inventory's trusted_ca_files) into ConfigMap company-ca-bundle in every namespace. */ -}}
 {{- $certs := .Files.Glob "*.{pem,crt}" }}
 {{- if $certs }}
 apiVersion: v1
@@ -25,6 +26,10 @@ spec:
     - configMap:
         name: company-ca-certs
         includeAllKeys: true
+    {{- end }}
+    {{- with .Values.siteCAs }}
+    - inLine: |
+        {{- . | trim | nindent 8 }}
     {{- end }}
   target:
     configMap:

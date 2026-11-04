@@ -5,7 +5,8 @@
   "sslRequired": "none",
   "registrationAllowed": false,
   "groups": [
-    { "name": "grafana-admins" }{% for t in tenants %},
+    { "name": "grafana-admins" },
+    { "name": "argocd-admins" }{% for t in tenants %},
     { "name": "tenant-{{ t.name }}" }{% endfor %}
 
   ],
@@ -29,6 +30,38 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "https://grafana.{{ domain }}/login##http://grafana.{{ domain }}/login"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "{{ oauth.argocd_client_id }}",
+      "name": "Argo CD",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ argocd_oauth_client_secret }}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "rootUrl": "https://argocd.{{ domain }}",
+      "redirectUris": ["https://argocd.{{ domain }}/auth/callback"],
+      "webOrigins": ["https://argocd.{{ domain }}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://argocd.{{ domain }}/login"
       },
       "protocolMappers": [
         {

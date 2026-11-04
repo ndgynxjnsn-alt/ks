@@ -19,6 +19,9 @@ charts:
   cert-manager: { oci: oci://quay.io/jetstack/charts/cert-manager, version: v1.21.2 }
   trust-manager: { oci: oci://quay.io/jetstack/charts/trust-manager, version: v0.26.0 }
   cloudnative-pg: { oci: oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg, version: 0.29.1 }  # operator 1.30.1
+  plugin-barman-cloud:                                                                    # plugin 0.15.1
+    oci: oci://ghcr.io/cloudnative-pg/charts/plugin-barman-cloud
+    version: 0.8.1
   argo-cd: { oci: oci://ghcr.io/argoproj/argo-helm/argo-cd, version: 10.10.5 }           # Argo CD 3.5.5
   # TopoLVM and Headlamp publish their charts to HTTPS repositories only (no OCI artifact)
   topolvm: { repo: https://topolvm.github.io/topolvm, version: 17.3.0 }                   # TopoLVM 0.42.0
@@ -43,6 +46,8 @@ grafana_plugins:
 
 # PostgreSQL for Grafana (CloudNativePG cluster "grafana-db", 3 instances)
 grafana_db_image: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+# PG Back Web: web UI for pg_dump backups of Grafana's database to S3 and restores (https://pgbackweb.<domain>)
+pgbackweb_image: docker.io/eduardolat/pgbackweb:0.5.2
 
 demo_image: lgtm.local/demo:1.0.0
 otel_agent_version: 2.32.0
@@ -66,8 +71,15 @@ s3_access_key_id: "GK{{ lookup('password', secrets_dir + '/s3_access_key_id char
 s3_secret_access_key: "{{ lookup('password', secrets_dir + '/s3_secret_access_key chars=digits,abcdef length=64') }}"
 grafana_admin_password: >-
   {{ lookup('password', secrets_dir + '/grafana_admin_password chars=ascii_letters,digits length=20') }}
+pgbackweb_admin_password: >-
+  {{ lookup('password', secrets_dir + '/pgbackweb_admin_password chars=ascii_letters,digits length=20') }}
+pgbackweb_encryption_key: >-
+  {{ lookup('password', secrets_dir + '/pgbackweb_encryption_key chars=ascii_letters,digits length=40') }}
+pgbackweb_db_password: >-
+  {{ lookup('password', secrets_dir + '/pgbackweb_db_password chars=ascii_letters,digits length=32') }}
 
-garage_buckets: [loki-chunks, loki-ruler, tempo-traces, mimir-blocks, mimir-ruler, mimir-alertmanager, pyroscope-data]
+garage_buckets: [loki-chunks, loki-ruler, tempo-traces, mimir-blocks, mimir-ruler, mimir-alertmanager, pyroscope-data,
+                 grafana-db-backups, pgbackweb]   # Grafana's PostgreSQL: CloudNativePG (Barman) and PG Back Web
 
 # Pods behind the ingress VIP: RKE2's bundled Traefik.
 traefik_selector: { app.kubernetes.io/name: rke2-traefik }

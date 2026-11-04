@@ -1,20 +1,23 @@
 # LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
-#   Keycloak - OAuth/OIDC for Grafana        Pebble - ACME server with External Account Binding (lab CA)
+#   Keycloak - OAuth/OIDC for Grafana and Argo CD   Pebble - ACME server with External Account Binding (lab CA)
 #   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
-#   Gitea    - Git + Helm repository for Argo CD
+#   Gitea    - Git (https): this repository for Argo CD, repository "grafana" for Grafana's Git Sync
+#   Nexus    - artifact repository: Docker registry + Helm repository
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
 #   ansible-playbook -i lab/inventory lab/external.yml   (add -e lab_docker_sudo=true -K without docker group)
-- name: External services (Keycloak, Pebble)
+- name: External services (Keycloak, Pebble, BIND, Gitea, Nexus)
   hosts: localhost
   connection: local
   gather_facts: false
   vars_files: [../ansible/group_vars/all.yml]   # shared paths and generated secrets
   vars:
     gen: "{{ repo_dir }}/lab/external/.generated"
+    lab_ca: "{{ gen }}/lab-ca.crt"
+    gitea_api: "https://{{ external_host_ip }}:3000/api"
   tasks:
     - name: Directories for generated configs
       ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }
-      loop: [keycloak, pebble, bind]
+      loop: [keycloak, pebble, bind, gitea]
 
     - name: Writable zone directory (named runs as user bind in the container)
       ansible.builtin.file: { path: "{{ gen }}/bind/zones", state: directory, mode: "0777" }
@@ -49,6 +52,29 @@
         chdir: "{{ gen }}/pebble"
         creates: "{{ gen }}/pebble/acme.crt"
 
+    # Grafana's Git Sync only speaks https: Gitea gets a certificate from a lab CA, which the inventory adds to
+    # the cluster's trusted CAs (trusted_ca_files). (Pebble's endpoint CA above lacks the key usage extension
+    # that strict TLS clients such as Python 3.13 require.)
+    - name: Lab CA and TLS certificate for Gitea
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=LGTM lab CA" \
+            -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -keyout lab-ca.key -out lab-ca.crt 2>/dev/null
+          openssl req -newkey rsa:2048 -nodes -subj "/CN={{ external_host_ip }}" \
+            -keyout gitea/tls.key -out gitea/tls.csr 2>/dev/null
+          printf 'subjectAltName=IP:%s,DNS:localhost\nkeyUsage=critical,digitalSignature,keyEncipherment\n%s\n' \
+            "{{ external_host_ip }}" 'extendedKeyUsage=serverAuth' > gitea/tls.ext
+          openssl x509 -req -in gitea/tls.csr -CA lab-ca.crt -CAkey lab-ca.key -CAcreateserial \
+            -days 3650 -extfile gitea/tls.ext -out gitea/tls.crt 2>/dev/null
+          chmod 0644 gitea/tls.key gitea/tls.crt lab-ca.crt   # read by the rootless gitea user
+          chmod 0600 lab-ca.key
+          rm -f gitea/tls.csr gitea/tls.ext
+        chdir: "{{ gen }}"
+        creates: "{{ gen }}/gitea/tls.crt"
+      notify: Restart gitea
+
     - name: Pebble configuration (EAB key id + HMAC key from tls_issuer)
       ansible.builtin.template:
         src: templates/pebble-config.json.j2
@@ -73,14 +99,20 @@
       register: compose
       changed_when: "'Started' in compose.stderr or 'Recreated' in compose.stderr or 'Created' in compose.stderr"
 
+    - name: Keycloak realm up to date (clients, groups, users)
+      ansible.builtin.include_tasks: tasks/keycloak-realm.yml
+
+    - name: Restart Gitea now if its certificate changed
+      ansible.builtin.meta: flush_handlers
+
     - name: Wait for Gitea
-      ansible.builtin.uri: { url: "http://127.0.0.1:3000/api/healthz" }
+      ansible.builtin.uri: { url: "{{ gitea_api }}/healthz", ca_path: "{{ lab_ca }}" }
       register: gitea_health
       until: gitea_health.status == 200
       retries: 30
       delay: 5
 
-    - name: Gitea user owning the repository and the Helm charts
+    - name: Gitea user owning the repositories
       ansible.builtin.command:
         argv: [docker, compose, exec, -T, gitea, gitea, admin, user, create, --admin, --username,
                "{{ gitops.publish.username }}", --password, "{{ gitops.publish.password }}",
@@ -92,6 +124,13 @@
       failed_when: gitea_user.rc != 0 and 'already exists' not in gitea_user.stderr + gitea_user.stdout
       no_log: true
 
+    - name: Grafana's Git repository and its first content
+      ansible.builtin.include_tasks: tasks/grafana-repo.yml
+      when: grafana_git_sync is defined
+
+    - name: Nexus (Docker + Helm repositories, publishing user)
+      ansible.builtin.include_tasks: tasks/nexus.yml
+
     - name: Next steps
       vars:
         lgtm_fqdns: "{{ lgtm_hosts | map('regex_replace', '$', '.' ~ domain) | list }}"
@@ -101,15 +140,23 @@
           - "                             {{ ingress_vip }} {{ lgtm_fqdns | join(' ') }}"
           - "(or use the lab DNS: dig @{{ external_host_ip }} -p 10053 grafana.{{ domain }})"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
+          - "Nexus: http://{{ external_host_ip }}:8091  (admin / .secrets/nexus_admin_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }}"
           - "  passwords: .secrets/keycloak_user_<name>"
-          - "Then: ansible-playbook -i lab/inventory ansible/lgtm.yml"
+          - "Then: ansible-playbook -i lab/inventory ansible/publish.yml (images + charts -> Nexus), site.yml, lgtm.yml"
 
   # the realm is only imported when it doesn't exist; config changes of Pebble/BIND need a restart
   handlers:
     - name: Restart pebble
       ansible.builtin.command:
         cmd: docker compose restart pebble
+        chdir: "{{ repo_dir }}/lab/external"
+      become: "{{ lab_docker_sudo | default(false) }}"
+      changed_when: true
+
+    - name: Restart gitea
+      ansible.builtin.command:
+        cmd: docker compose restart gitea
         chdir: "{{ repo_dir }}/lab/external"
       become: "{{ lab_docker_sudo | default(false) }}"
       changed_when: true

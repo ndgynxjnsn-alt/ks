@@ -37,21 +37,5 @@
   changed_when: true
   no_log: true
 
-- name: Check buckets
-  ansible.builtin.command: garage -c /etc/garage.toml bucket info {{ item }}
-  loop: "{{ garage_buckets }}"
-  register: garage_bucket
-  changed_when: false
-  failed_when: false
-
-- name: Create buckets
-  ansible.builtin.command: garage -c /etc/garage.toml bucket create {{ item.item }}
-  loop: "{{ garage_bucket.results }}"
-  loop_control: { label: "{{ item.item }}" }
-  when: item.rc != 0
-  changed_when: true
-
-- name: Grant the access key to all buckets
-  ansible.builtin.command: garage -c /etc/garage.toml bucket allow --read --write --owner {{ item }} --key lgtm
-  loop: "{{ garage_buckets }}"
-  changed_when: false
+- name: Buckets
+  ansible.builtin.include_tasks: buckets.yml

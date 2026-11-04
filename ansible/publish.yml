@@ -1,0 +1,73 @@
+# Pushes artifacts/ (from download.yml) to the artifact repository (Nexus, inventory: registry):
+#   images/*.tar.zst  -> <registry.host>/<source registry>/<path>:<tag>   (missing ones only)
+#   charts/*.tgz      -> registry.publish.helm_upload_url                 (missing ones only)
+# The nodes pull through containerd mirrors (ansible/roles/rke2, registries.yaml), Argo CD reads the charts.
+# Run after download.yml and before site.yml / lgtm.yml:
+#   ansible-playbook -i <inventory> ansible/publish.yml
+- name: Publish images and charts to the artifact repository
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    crane: "{{ artifacts_dir }}/bin/crane{{ ' --insecure' if registry.insecure | default(false) else '' }}"
+    docker_config: "{{ artifacts_dir }}/work/docker-config"
+    image_index: "{{ lookup('file', artifacts_dir + '/images/index.yml') | from_yaml }}"
+  tasks:
+    - name: Directory for crane's credentials
+      ansible.builtin.file: { path: "{{ docker_config }}", state: directory, mode: "0700" }
+
+    - name: Credentials of the publishing user for crane
+      ansible.builtin.copy:
+        content: "{{ {'auths': {registry.host: {'auth': auth | b64encode}}} | to_json }}"
+        dest: "{{ docker_config }}/config.json"
+        mode: "0600"
+      vars:
+        auth: "{{ registry.publish.username }}:{{ registry.publish.password }}"
+      no_log: true
+
+    # crane only uploads layers the registry doesn't have; an image that is already there is skipped entirely.
+    - name: Push images that the registry doesn't have yet
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          if {{ crane }} digest {{ dest }} >/dev/null 2>&1; then echo PRESENT; exit 0; fi
+          tar={{ artifacts_dir }}/work/push-image.tar
+          zstd -q -dc {{ artifacts_dir }}/images/{{ item.file }} > $tar
+          {{ crane }} push $tar {{ dest }} >/dev/null
+          rm -f $tar
+          echo PUSHED
+      environment: { DOCKER_CONFIG: "{{ docker_config }}" }
+      vars:
+        dest: "{{ registry.host }}/{{ item.ref }}"
+      loop: "{{ image_index }}"
+      loop_control: { label: "{{ item.ref }}" }
+      register: pushed
+      changed_when: "'PUSHED' in pushed.stdout"
+
+    - name: Charts already in the Helm repository
+      ansible.builtin.uri:
+        url: "{{ registry.publish.helm_upload_url }}{{ item | basename }}"
+        method: HEAD
+        user: "{{ registry.publish.username }}"
+        password: "{{ registry.publish.password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+        ca_path: "{{ registry.ca_file | default(omit) }}"
+      loop: "{{ query('fileglob', artifacts_dir + '/charts/*.tgz') }}"
+      loop_control: { label: "{{ item | basename }}" }
+      register: chart_present
+
+    - name: Upload missing charts (a released chart version is never overwritten)
+      ansible.builtin.uri:
+        url: "{{ registry.publish.helm_upload_url }}{{ item.item | basename }}"
+        method: PUT
+        src: "{{ item.item }}"
+        headers: { Content-Type: application/octet-stream }
+        user: "{{ registry.publish.username }}"
+        password: "{{ registry.publish.password }}"
+        force_basic_auth: true
+        status_code: [200, 201]
+        ca_path: "{{ registry.ca_file | default(omit) }}"
+      loop: "{{ chart_present.results | selectattr('status', 'equalto', 404) }}"
+      loop_control: { label: "{{ item.item | basename }}" }
+      changed_when: true

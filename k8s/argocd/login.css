@@ -1,0 +1,6 @@
+/* Argo CD login page (ui.cssurl): SSO is the way in; the local admin login is the safety valve, kept visible
+   but de-emphasised until someone actually uses it. */
+.login__box_saml .argo-button { font-size: 1.15em; font-weight: 600; padding: 14px 0; }
+.login__saml-separator span::after { content: " - local admin, only if SSO is down"; }
+.login__box form { opacity: 0.45; transform: scale(0.92); transition: opacity 0.2s ease; }
+.login__box form:hover, .login__box form:focus-within { opacity: 1; }

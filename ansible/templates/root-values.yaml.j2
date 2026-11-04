@@ -20,6 +20,10 @@ apps:
     version: "{{ charts['cloudnative-pg'].version }}"
     namespace: cnpg-system
     wave: -3
+  plugin-barman-cloud:            # backups of Grafana's PostgreSQL to S3 (CloudNativePG plugin)
+    version: "{{ charts['plugin-barman-cloud'].version }}"
+    namespace: cnpg-system
+    wave: -3
   trust-manager:                  # distributes certs/ (+ public CAs) as ConfigMap company-ca-bundle
     version: "{{ charts['trust-manager'].version }}"
     namespace: cert-manager
@@ -28,6 +32,12 @@ apps:
     path: certs
     namespace: cert-manager
     wave: -1
+{% if trusted_ca_files | default([]) %}
+{%   set site_cas = [] %}
+{%   for f in trusted_ca_files %}{% set _ = site_cas.append(lookup('file', f) | trim) %}{% endfor %}
+    values:
+      siteCAs: {{ site_cas | join('\n') | to_json }}
+{% endif %}
   topolvm:                        # local PersistentVolumes (LVM on every node), default StorageClass
     version: "{{ charts.topolvm.version }}"
     namespace: topolvm-system

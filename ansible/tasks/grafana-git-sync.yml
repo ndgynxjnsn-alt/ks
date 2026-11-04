@@ -1,0 +1,49 @@
+# Git Sync for one Grafana org: a Repository resource that syncs <dir>/ of grafana_git_sync.url into the folder
+# "LGTM" of the org and commits dashboards saved in the UI back (workflows). Created once; Grafana keeps the
+# token encrypted and doesn't show it again (to change url/token: delete the repository in Administration ->
+# Provisioning, re-run lgtm.yml). Vars: git_sync_org_id, git_sync_dir
+- name: "Git Sync repository of org {{ git_sync_dir }}"
+  vars:
+    git_sync_namespace: "{{ 'default' if git_sync_org_id | int == 1 else 'org-' ~ git_sync_org_id }}"
+    repositories_url: >-
+      http://{{ ingress_vip }}/apis/provisioning.grafana.app/v0alpha1/namespaces/{{ git_sync_namespace }}/repositories
+  block:
+    - name: "Look up the repository of org {{ git_sync_dir }}"
+      ansible.builtin.uri:
+        url: "{{ repositories_url }}/lgtm"
+        headers: { Host: "grafana.{{ domain }}" }
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: git_sync_repo
+
+    - name: "Create the repository of org {{ git_sync_dir }}"
+      ansible.builtin.uri:
+        url: "{{ repositories_url }}"
+        method: POST
+        headers: { Host: "grafana.{{ domain }}" }
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          apiVersion: provisioning.grafana.app/v0alpha1
+          kind: Repository
+          metadata: { name: lgtm }
+          spec:
+            title: LGTM                     # also the name of the folder the dashboards land in
+            type: git
+            git:
+              url: "{{ grafana_git_sync.url }}"
+              branch: "{{ grafana_git_sync.branch }}"
+              path: "{{ git_sync_dir }}/"
+              tokenUser: "{{ grafana_git_sync.token_user }}"
+            sync: { enabled: true, target: folder, intervalSeconds: 60 }
+            workflows: "{{ grafana_git_sync.workflows | default(['write']) }}"
+          secure:
+            token: { create: "{{ grafana_git_sync.token }}" }
+        status_code: [200, 201]
+      when: git_sync_repo.status == 404
+      changed_when: true
+      no_log: true

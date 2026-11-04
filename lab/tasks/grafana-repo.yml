@@ -1,0 +1,86 @@
+# The Git repository Grafana's Git Sync works on (grafana_git_sync in the inventory): repository "grafana" of
+# the Gitea user, an access token for Grafana, and - only when the repository is new - the first content:
+#   main/<dashboard>.json      all of grafana/dashboards (Main org: every tenant)
+#   <tenant>/<dashboard>.json  the dashboards listed for the tenant (tenants[].dashboards)
+# From then on the repository is the source of truth; grafana/dashboards is not deployed again.
+- name: Grafana repository on Gitea
+  vars:
+    gitea_auth: { user: "{{ gitops.publish.username }}", password: "{{ gitops.publish.password }}" }
+    token_file: "{{ secrets_dir }}/gitea_grafana_token"
+  block:
+    - name: Repository "grafana"
+      ansible.builtin.uri:
+        url: "{{ gitea_api }}/v1/user/repos"
+        method: POST
+        user: "{{ gitea_auth.user }}"
+        password: "{{ gitea_auth.password }}"
+        force_basic_auth: true
+        ca_path: "{{ lab_ca }}"
+        body_format: json
+        body: { name: grafana, private: true, default_branch: "{{ grafana_git_sync.branch }}" }
+        status_code: [201, 409]
+      register: grafana_repo
+      changed_when: grafana_repo.status == 201
+
+    - name: Access token for Grafana exists
+      ansible.builtin.stat: { path: "{{ token_file }}" }
+      register: token_stat
+
+    - name: Access token for Grafana (Gitea shows a token only once, so it is replaced when the file is missing)
+      when: not token_stat.stat.exists
+      block:
+        - name: Remove an old token of that name
+          ansible.builtin.uri:
+            url: "{{ gitea_api }}/v1/users/{{ gitea_auth.user }}/tokens/grafana-git-sync"
+            method: DELETE
+            user: "{{ gitea_auth.user }}"
+            password: "{{ gitea_auth.password }}"
+            force_basic_auth: true
+            ca_path: "{{ lab_ca }}"
+            status_code: [204, 404]
+
+        - name: Create the token
+          ansible.builtin.uri:
+            url: "{{ gitea_api }}/v1/users/{{ gitea_auth.user }}/tokens"
+            method: POST
+            user: "{{ gitea_auth.user }}"
+            password: "{{ gitea_auth.password }}"
+            force_basic_auth: true
+            ca_path: "{{ lab_ca }}"
+            body_format: json
+            body: { name: grafana-git-sync, scopes: [write:repository] }
+            status_code: 201
+          register: grafana_token
+          no_log: true
+
+        - name: Store the token in .secrets/
+          ansible.builtin.copy:
+            content: "{{ grafana_token.json.sha1 }}"
+            dest: "{{ token_file }}"
+            mode: "0600"
+          no_log: true
+
+    - name: First content of the new repository
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          rm -rf grafana-seed && mkdir grafana-seed && cd grafana-seed
+          git init -q -b {{ grafana_git_sync.branch }}
+          mkdir main && cp {{ repo_dir }}/grafana/dashboards/*.json main/
+          {% for t in tenants %}
+          mkdir {{ t.name }}
+          {% for d in t.dashboards %}
+          cp {{ repo_dir }}/grafana/dashboards/{{ d }} {{ t.name }}/
+          {% endfor %}
+          {% endfor %}
+          printf '# Grafana dashboards\n\nOne directory per Grafana org, synced by Grafana (Git Sync).\n' > README.md
+          git add -A
+          git -c user.name=lgtm -c user.email=lgtm@example.corp commit -q -m "Dashboards from the LGTM repository"
+          git -c http.sslCAInfo={{ lab_ca }} \
+            -c "http.extraHeader=Authorization: Basic {{ (gitea_auth.user ~ ':' ~ gitea_auth.password) | b64encode }}" \
+            push -q {{ grafana_git_sync.url }} HEAD:{{ grafana_git_sync.branch }}
+          cd .. && rm -rf grafana-seed
+        chdir: "{{ artifacts_dir }}/work"
+      changed_when: true
+      when: grafana_repo.status == 201
+      no_log: true

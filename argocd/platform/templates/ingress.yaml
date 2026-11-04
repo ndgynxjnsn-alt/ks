@@ -15,6 +15,7 @@
   "garage"    (list (list "/" "garage" 3900 "lgtm"))
   "argocd"    (list (list "/" "argocd-server" 80 "argocd"))
   "headlamp"  (list (list "/" "headlamp" 80 "headlamp"))
+  "pgbackweb" (list (list "/" "pgbackweb" 8085 "lgtm"))
   "faro"      (list (list "/demo/" "alloy" 12347 "lgtm") (list "/platform/" "alloy" 12348 "lgtm"))
 }}
 {{- range $name := .Values.hosts }}

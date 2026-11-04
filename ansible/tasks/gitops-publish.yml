@@ -1,5 +1,6 @@
-# Publishes this repository and the charts for Argo CD (lab: Gitea from lab/external; at a company this is
-# usually done by CI). Only committed changes are deployed: Argo CD reads Git, not the working tree.
+# Publishes this repository for Argo CD (lab: Gitea from lab/external; at a company this is usually done by CI).
+# The charts go to the Helm repository with ansible/publish.yml.
+# Only committed changes are deployed: Argo CD reads Git, not the working tree.
 # the git module can't report the working tree status
 - name: Uncommitted changes (not deployed)  # noqa: command-instead-of-module
   ansible.builtin.command: git -C {{ repo_dir }} status --porcelain
@@ -13,8 +14,11 @@
 
 - name: Push HEAD to the Git server
   ansible.builtin.command:
-    argv:
-      - git
+    argv: "{{ ['git'] + git_ca_args + git_push_args }}"
+  vars:
+    git_auth: "{{ gitops.publish.username }}:{{ gitops.publish.password }}"
+    git_ca_args: "{{ ['-c', 'http.sslCAInfo=' ~ gitops.publish.ca_file] if gitops.publish.ca_file is defined else [] }}"
+    git_push_args:
       - -C
       - "{{ repo_dir }}"
       - -c
@@ -24,22 +28,5 @@
       - "{{ gitops.publish.git_push_url }}"
       - "HEAD:refs/heads/{{ gitops.revision }}"
   register: git_push
-  vars:
-    git_auth: "{{ gitops.publish.username }}:{{ gitops.publish.password }}"
   changed_when: "'up-to-date' not in git_push.stderr"
   no_log: true
-
-- name: Upload charts to the Helm repository (an existing version is kept)
-  ansible.builtin.uri:
-    url: "{{ gitops.publish.helm_upload_url }}"
-    method: POST
-    src: "{{ item }}"
-    headers: { Content-Type: application/octet-stream }
-    user: "{{ gitops.publish.username }}"
-    password: "{{ gitops.publish.password }}"
-    force_basic_auth: true
-    status_code: [201, 409]
-  loop: "{{ query('fileglob', artifacts_dir + '/charts/*.tgz') }}"
-  loop_control: { label: "{{ item | basename }}" }
-  register: chart_upload
-  changed_when: chart_upload.status == 201

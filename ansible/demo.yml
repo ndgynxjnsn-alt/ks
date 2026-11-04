@@ -1,4 +1,5 @@
-# Builds the demo app image on the Ansible host (Jib, no Docker daemon), loads it on every node, deploys it.
+# Builds the demo app image on the Ansible host (Jib, no Docker daemon) and pushes it to the artifact repository
+# (inventory: registry) as <registry.host>/lgtm.local/demo; the nodes pull lgtm.local/demo through their mirror.
 - name: Build the demo image
   hosts: localhost
   connection: local
@@ -31,58 +32,28 @@
       args: { chdir: "{{ app_dir }}" }
       changed_when: false
 
-    # Image ID = sha256 of the image config; Jib builds are reproducible, so unchanged code -> same ID.
-    - name: Image ID of the new build
-      ansible.builtin.shell: >-
-        set -o pipefail; t={{ app_dir }}/target/jib-image.tar;
-        tar -xOf $t "$(tar -xOf $t manifest.json | jq -r '.[0].Config')" | sha256sum | cut -d' ' -f1
-      args: { executable: /bin/bash }
-      register: built
-      changed_when: false
+    # Jib builds are reproducible: unchanged code -> same image digest -> nothing to restart
+    - name: Push the image (the pods are restarted only if its digest changed)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          before=$({{ crane }} digest {{ dest }} 2>/dev/null || true)
+          {{ crane }} push {{ app_dir }}/target/jib-image.tar {{ dest }} >/dev/null
+          after=$({{ crane }} digest {{ dest }})
+          [ "$before" = "$after" ] && echo UNCHANGED || echo PUSHED
+      environment: { DOCKER_CONFIG: "{{ artifacts_dir }}/work/docker-config" }   # written by publish.yml
+      vars:
+        crane: "{{ artifacts_dir }}/bin/crane{{ ' --insecure' if registry.insecure | default(false) else '' }}"
+        dest: "{{ registry.host }}/{{ demo_image }}"
+      register: demo_push
+      changed_when: "'PUSHED' in demo_push.stdout"
+      notify: Restart the demo pods
 
-- name: Load the image on every node (only if it changed)
-  hosts: nodes
-  become: true
-  gather_facts: false
-  vars:
-    built_id: "sha256:{{ hostvars['localhost'].built.stdout }}"
-  tasks:
-    - name: Image ID on the node
+  # The manifests (k8s/demo) are deployed by Argo CD (app "demo"). Same tag with new content: delete the pods (not
+  # "rollout restart", which would change the Deployment spec that Argo CD keeps in sync); they pull the tag again
+  # (imagePullPolicy: Always).
+  handlers:
+    - name: Restart the demo pods
       ansible.builtin.command: >-
-        /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock
-        inspecti -o go-template --template '{{ '{{' }}.status.id{{ '}}' }}' {{ demo_image }}
-      register: node_image
-      changed_when: false
-      failed_when: false
-
-    - name: Copy and import the image
-      when: node_image.stdout | trim != built_id
-      block:
-        - name: Copy image tarball
-          ansible.builtin.copy:
-            src: "{{ repo_dir }}/apps/demo/target/jib-image.tar"
-            dest: /var/lib/rancher/rke2/agent/images/demo.tar
-            mode: "0644"
-
-        - name: Import image into containerd
-          ansible.builtin.command: >-
-            /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io
-            images import /var/lib/rancher/rke2/agent/images/demo.tar
-          changed_when: true
-
-# The manifests (k8s/demo) are deployed by Argo CD (app "demo"). Same tag with new content: delete the
-# pods (not "rollout restart", which would change the Deployment spec that Argo CD keeps in sync).
-- name: Restart the demo pods to pick up a new image
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  vars:
-    kubectl: "{{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig"
-    image_changed: >-
-      {{ groups['nodes'] | map('extract', hostvars, ['node_image', 'stdout'])
-         | map('trim') | reject('equalto', 'sha256:' ~ built.stdout) | list | length > 0 }}
-  tasks:
-    - name: Delete the demo pods (the Deployments recreate them)
-      ansible.builtin.command: "{{ kubectl }} -n demo delete pods --all --wait=false"
-      when: image_changed | bool
+        {{ artifacts_dir }}/bin/kubectl --kubeconfig {{ repo_dir }}/kubeconfig -n demo delete pods --all --wait=false
       changed_when: true

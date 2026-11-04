@@ -1,6 +1,7 @@
 # One Grafana organization per tenant: created via the HTTP API (provisioning can't create orgs), with the
-# datasources of ansible/templates/grafana-datasources.yaml.j2 pinned to the tenant and its dashboards.
-# Idempotent: existing orgs/datasources are updated in place. Var: tenant ({name, dashboards}).
+# datasources of ansible/templates/grafana-datasources.yaml.j2 pinned to the tenant, and Git Sync of the
+# tenant's directory in Grafana's Git repository (dashboards).
+# Idempotent: existing orgs/datasources are updated in place. Var: tenant ({name})
 - name: "Grafana org {{ tenant.name }}"
   vars:
     grafana_api: "http://{{ ingress_vip }}/api"
@@ -73,34 +74,7 @@
       loop_control: { label: "{{ item.ds.uid }}" }
       changed_when: item.status == 404
 
-    - name: "Folder LGTM in org {{ tenant.name }}"
-      ansible.builtin.uri:
-        url: "{{ grafana_api }}/folders"
-        method: POST
-        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
-        user: admin
-        password: "{{ grafana_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body: { uid: lgtm, title: LGTM }
-        status_code: [200, 409, 412]   # 409/412: exists already
-      register: folder
-      changed_when: folder.status == 200
-      when: tenant.dashboards | length > 0
-
-    - name: "Dashboards of org {{ tenant.name }}"
-      ansible.builtin.uri:
-        url: "{{ grafana_api }}/dashboards/db"
-        method: POST
-        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
-        user: admin
-        password: "{{ grafana_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          dashboard: >-
-            {{ lookup('file', repo_dir + '/argocd/platform/dashboards/' + item) | from_json | combine({'id': none}) }}
-          folderUid: lgtm
-          overwrite: true
-      loop: "{{ tenant.dashboards }}"
-      changed_when: false
+    - name: "Git Sync: dashboards of org {{ tenant.name }}"
+      ansible.builtin.include_tasks: grafana-git-sync.yml
+      vars: { git_sync_org_id: "{{ tenant_org_id }}", git_sync_dir: "{{ tenant.name }}" }
+      when: grafana_git_sync is defined

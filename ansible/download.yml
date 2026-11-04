@@ -19,6 +19,9 @@
       - quay.io/jetstack/cert-manager-acmesolver:{{ charts['cert-manager'].version }}
       # chosen per Cluster resource (ansible/templates/grafana-db.yaml.j2), not by the operator chart
       - "{{ grafana_db_image }}"
+      # set as an environment value of the Barman Cloud plugin (it injects the sidecar into the Postgres pods)
+      - ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1
+      - "{{ pgbackweb_image }}"   # argocd/platform/templates/pgbackweb.yaml
   tasks:
     - name: Create artifact directories
       ansible.builtin.file: { path: "{{ artifacts_dir }}/{{ item }}", state: directory, mode: "0755" }
@@ -137,6 +140,8 @@
             $helm template trust-manager $c/trust-manager-{{ charts['trust-manager'].version }}.tgz \
               -f $v/trust-manager.yaml
             $helm template cnpg $c/cloudnative-pg-{{ charts['cloudnative-pg'].version }}.tgz -f $v/cloudnative-pg.yaml
+            $helm template barman $c/plugin-barman-cloud-{{ charts['plugin-barman-cloud'].version }}.tgz \
+              -f $v/plugin-barman-cloud.yaml
             $helm template argocd $c/argo-cd-{{ charts['argo-cd'].version }}.tgz -f $v/argocd.yaml
             $helm template topolvm $c/topolvm-{{ charts.topolvm.version }}.tgz -f $v/topolvm.yaml
             $helm template headlamp $c/headlamp-{{ charts.headlamp.version }}.tgz -f $v/headlamp.yaml

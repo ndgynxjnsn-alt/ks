@@ -17,3 +17,9 @@ grafanaDB:
   instances: 3
   size: 1Gi
   external: {{ grafana_db_external | default(false) | to_json }}
+  backup:
+    retention: {{ grafana_db_backup_retention | default('7d') }}
+    schedule: "0 0 2 * * *"
+pgbackweb:
+  image: "{{ pgbackweb_image }}"
+s3Endpoint: "{{ s3_endpoint }}"

@@ -1,0 +1,53 @@
+# Helps choose the TopoLVM disk of every node (read-only: nothing is formatted or written).
+#   ansible-playbook -i <inventory> ansible/disks.yml                    # inventory of the disks
+#   ansible-playbook -i <inventory> ansible/disks.yml -e benchmark=true  # + read benchmark (~8 s per disk)
+#
+# Which disk for what:
+#   TopoLVM (topolvm_disk)  the hot path: Loki/Mimir/Pyroscope ingesters (WAL, head blocks, fsync on every write)
+#                           and PostgreSQL. Latency-bound and small (~10 GB per node with the default sizes)
+#                           -> the FASTEST free disk (NVMe/SSD), not the biggest.
+#   Garage S3 (all other    compacted chunks/blocks: written in large batches, read for queries over older
+#   empty disks)            data. Throughput- and capacity-bound -> the BIG disks; HDDs are fine.
+#   OS disk                 never: it carries etcd (/var/lib/rancher), which needs low fsync latency; ingester
+#                           WALs on the same disk delay etcd writes -> leader elections, an unstable API.
+#
+# Disk names (sda, nvme0n1) can change between boots, so the inventory names the disk by /dev/disk/by-id, per
+# host (host_vars or hosts.yml), e.g.
+#   lgtm1: { ansible_host: ..., topolvm_disk: nvme-Micron_7450_MTFDKBA960TFR_2223... }
+- name: Disks of the nodes
+  hosts: nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Inventory of the disks (and read benchmark with -e benchmark=true)
+      ansible.builtin.script:
+        cmd: files/disk-report.py {{ '--bench' if benchmark | default(false) | bool else '' }}
+        executable: python3
+      register: disk_report
+      changed_when: false
+
+    - name: Disks of this node and the suggestion
+      vars:
+        report: "{{ disk_report.stdout | from_json }}"
+        best: "{{ report.suggestion }}"
+        bench_line: 4k random read p50 %s ms, p99 %s ms, %s IOPS; sequential %s MB/s
+      ansible.builtin.debug:
+        msg: |-
+          {% for d in report.disks %}
+          {{ '%-8s %7s GB  %-3s %-7s %-8s' | format(d.name, d.size_gb, 'HDD' if d.rotational else 'SSD', d.transport,
+             d.use) }} {{ d.model }}
+          {% if d.bench is defined %}
+                   {{ d.bench.error if d.bench.error is defined else bench_line | format(d.bench.rand_read_p50_ms,
+                      d.bench.rand_read_p99_ms, d.bench.rand_read_iops, d.bench.seq_read_mb_s) }}
+          {% endif %}
+                   by-id: {{ d.by_id | join(', ') if d.by_id else '(none: not usable as topolvm_disk)' }}
+          {% endfor %}
+
+          {% if best %}
+          suggestion:  topolvm_disk: {{ best.by_id[0] }}    ({{ best.name }}, {{ best.size_gb }} GB, {{ best.use }}
+          {{- ', the current one' if best.by_id[0] == topolvm_disk | default('') | basename }})
+          {% else %}
+          suggestion:  none - no disk besides the OS disk is free and has a /dev/disk/by-id name
+          {% endif %}
+          {{ '(benchmark: VM disks are cached by the host, so only real hardware gives meaningful numbers)'
+             if benchmark | default(false) | bool else '(compare by speed: -e benchmark=true)' }}

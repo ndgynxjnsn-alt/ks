@@ -5,11 +5,11 @@
 vip: 10.0.10.10            # free IP in the servers' subnet: Kubernetes API (6443) + RKE2 join (9345)
 ingress_vip: 10.0.10.20    # free IP in the same subnet: all LGTM hostnames (Traefik)
 domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro, pgbackweb]
 grafana_db_external: true   # Grafana's PostgreSQL on <ingress_vip>:5432 (postgres.<domain>), TLS + password
 
 # ---------------------------------------------------------------- storage
-topolvm_disk: /dev/disk/by-id/CHANGE-ME   # whole empty disk per node for TopoLVM (not used by Garage)
+# topolvm_disk is set per host in hosts.yml (the disks differ between servers); ansible/disks.yml suggests one.
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
 # The cluster must reach both: this repository (e.g. a GitLab mirror) and a Helm repository holding
@@ -43,5 +43,8 @@ oauth:
   enabled: true
   hostname: sso.company.org
   issuer: https://sso.company.org/realms/company
-  client_id: grafana-lgtm
+  client_id: grafana-lgtm                 # OAuth client of Grafana
+  argocd_client_id: argocd-lgtm           # a second client for Argo CD (redirect https://argocd.<domain>/auth/callback)
+  argocd_admin_groups: [lgtm-admins]      # IdP groups (claim "groups") -> Argo CD role:admin
 oauth_client_secret: "{{ vault_oauth_client_secret }}"
+argocd_oauth_client_secret: "{{ vault_argocd_oauth_client_secret }}"

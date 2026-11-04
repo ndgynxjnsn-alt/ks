@@ -4,7 +4,10 @@
        External access (.Values.grafanaDB.external): port 5432 of the ingress VIP -> Traefik's TCP entrypoint
        "postgres" -> the primary (grafana-db-rw). Postgres negotiates TLS inside its own protocol, so Traefik
        passes the connection through untouched (HostSNI(`*`)): one database per port, no routing by hostname.
-       The server certificate (CA in Secret grafana-db-ca) also names postgres.<domain>, for sslmode=verify-full. */ -}}
+       The server certificate (CA in Secret grafana-db-ca) also names postgres.<domain>, for sslmode=verify-full.
+       Backups: the Barman Cloud plugin archives every WAL segment and takes a daily base backup into the Garage
+       bucket grafana-db-backups, kept .Values.grafanaDB.backup.retention (point-in-time recovery into a new
+       cluster, see README). Role + database "pgbackweb" hold PG Back Web's own data (pgbackweb.yaml). */ -}}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -22,6 +25,15 @@ spec:
   {{- end }}
   bootstrap:
     initdb: { database: grafana, owner: grafana }
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters: { barmanObjectName: grafana-db-backups }
+  managed:
+    roles:
+      - name: pgbackweb
+        login: true
+        passwordSecret: { name: pgbackweb-db }    # created by Ansible
   affinity:
     enablePodAntiAffinity: true
     topologyKey: kubernetes.io/hostname
@@ -29,6 +41,46 @@ spec:
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 512Mi }
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: grafana-db-backups
+  namespace: lgtm
+spec:
+  retentionPolicy: {{ .Values.grafanaDB.backup.retention | quote }}
+  configuration:
+    destinationPath: s3://grafana-db-backups/
+    endpointURL: http://{{ .Values.s3Endpoint }}
+    s3Credentials:
+      accessKeyId: { name: s3-credentials, key: S3_ACCESS_KEY_ID }
+      secretAccessKey: { name: s3-credentials, key: S3_SECRET_ACCESS_KEY }
+      region: { name: s3-credentials, key: S3_REGION }
+    wal: { compression: gzip }
+    data: { compression: gzip }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: grafana-db-daily
+  namespace: lgtm
+spec:
+  schedule: {{ .Values.grafanaDB.backup.schedule | quote }}   # seconds minutes hours day month weekday
+  immediate: true                         # first base backup right away
+  backupOwnerReference: self
+  cluster: { name: grafana-db }
+  method: plugin
+  pluginConfiguration: { name: barman-cloud.cloudnative-pg.io }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: grafana-db-pgbackweb
+  namespace: lgtm
+spec:
+  cluster: { name: grafana-db }
+  name: pgbackweb
+  owner: pgbackweb
 {{- if .Values.grafanaDB.external }}
 ---
 apiVersion: traefik.io/v1alpha1

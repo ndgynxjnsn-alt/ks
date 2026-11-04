@@ -11,27 +11,55 @@ ingress_vip: 192.168.56.20    # every LGTM hostname -> Traefik, which routes by 
 # DNS: *.<domain> -> ingress_vip (lab: BIND in lab/external, or /etc/hosts).
 domain: lgtm.company.org
 # Hostnames served on the ingress VIP (backends: ansible/templates/ingress.yaml.j2). Remove one to unpublish it.
-lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro]
+lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro, pgbackweb]
 
 # Grafana's PostgreSQL (CloudNativePG) on port 5432 of the ingress VIP, e.g. postgres.<domain>:5432 (TLS, scram).
 grafana_db_external: true
 
-# ---------------------------------------------------------------- storage
-# Whole disk per node for the TopoLVM volume group (default StorageClass). Garage uses the other empty disks.
-topolvm_disk: /dev/disk/by-id/virtio-topolvm      # serial "topolvm" (lab/Vagrantfile)
+# Storage: topolvm_disk is set per host in hosts.yml (ansible/disks.yml helps choosing).
+
+# ---------------------------------------------------------------- artifact repository (Nexus)
+# Container images and Helm charts come from the company's Nexus (lab: lab/external): ansible/publish.yml pushes
+# artifacts/ there; the nodes pull through containerd mirrors (/etc/rancher/rke2/registries.yaml), Argo CD
+# reads the Helm repository. An image <registry>/<path> is stored as <host>/<registry>/<path>.
+registry:
+  host: "{{ external_host_ip }}:8092"     # Docker registry API of the hosted repository lgtm-docker
+  insecure: true                           # plain http (lab); https registries: ca_file below if not public
+  # ca_file: /path/to/registry-ca.crt      # CA of an https registry (path on the Ansible host)
+  # username / password                    # pull credentials (lab: anonymous read)
+  publish:                                 # ansible/publish.yml pushes with this user (lab: role lgtm-publisher)
+    helm_upload_url: "http://{{ external_host_ip }}:8091/repository/lgtm-helm/"
+    username: lgtm
+    password: "{{ lookup('password', secrets_dir + '/nexus_password chars=ascii_letters,digits length=20') }}"
 
 # ---------------------------------------------------------------- GitOps (Argo CD)
-# Argo CD deploys from a Git repository (this repo) and a Helm repository (artifacts/charts). Lab: both on
-# Gitea from lab/external; lgtm.yml pushes the committed HEAD and uploads the charts (gitops.publish).
+# Argo CD deploys from a Git repository (this repo, lab: Gitea from lab/external) and the Helm repository
+# (Nexus). lgtm.yml pushes the committed HEAD to Gitea (gitops.publish).
 gitops:
-  repo_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
+  repo_url: "https://{{ external_host_ip }}:3000/lgtm/lgtm.git"
   revision: main
-  helm_repo_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm"
+  helm_repo_url: "http://{{ external_host_ip }}:8091/repository/lgtm-helm/"
   publish:
-    git_push_url: "http://{{ external_host_ip }}:3000/lgtm/lgtm.git"
-    helm_upload_url: "http://{{ external_host_ip }}:3000/api/packages/lgtm/helm/api/charts"
+    git_push_url: "https://{{ external_host_ip }}:3000/lgtm/lgtm.git"
+    ca_file: "{{ repo_dir }}/lab/external/.generated/lab-ca.crt"   # Gitea's certificate (lab CA)
     username: lgtm
     password: "{{ lookup('password', secrets_dir + '/gitea_password chars=ascii_letters,digits length=20') }}"
+
+# CA certificates the cluster trusts in addition to certs/ and the public CAs (paths on the Ansible host), e.g.
+# a CA generated per site. Lab: the lab CA that signed Gitea's certificate (Argo CD and Grafana read Git).
+trusted_ca_files: ["{{ repo_dir }}/lab/external/.generated/lab-ca.crt"]
+
+# ---------------------------------------------------------------- Grafana Git Sync
+# Dashboards and folders of every Grafana org live in a second Git repository, one directory per org
+# (main/, <tenant>/). Grafana syncs it (Git Sync, pure Git over https) and commits what is saved in the UI;
+# Argo CD and Ansible don't deploy dashboards. Lab: repository "grafana" on Gitea, seeded once from
+# grafana/dashboards by lab/external.yml.
+grafana_git_sync:
+  url: "https://{{ external_host_ip }}:3000/lgtm/grafana.git"
+  branch: main
+  token_user: lgtm
+  token: "{{ lookup('file', secrets_dir + '/gitea_grafana_token') }}"   # written by lab/external.yml
+  workflows: [write]       # UI saves commit to the branch; [branch]: via pull requests; []: read-only
 
 # ---------------------------------------------------------------- tenants
 # Loki, Mimir, Tempo and Pyroscope run multi-tenant: every write and query carries X-Scope-OrgID.
@@ -43,7 +71,7 @@ gitops:
 # Adding a tenant: add it here, and add its pyroscope.relabel/write pair in k8s/values/alloy.yaml.
 tenants:
   - name: demo                     # the demo shop
-    # from argocd/platform/dashboards, imported into the tenant's Grafana org
+    # first content of the tenant's directory in Grafana's Git repository (lab/external.yml, from grafana/dashboards)
     dashboards: [lgtm-demo.json, order-journey.json]
   - name: platform                 # the cluster itself: pod logs (all namespaces except demo) and metrics
     dashboards: [cluster-health.json]
@@ -75,22 +103,29 @@ tls_issuer:
   # on the lab DNS, not in the cluster DNS, so cert-manager resolves the hostnames there.
   http01_check_nameservers: "{{ external_host_ip }}:10053"
 
-# ---------------------------------------------------------------- OAuth (Grafana <-> Keycloak)
-# Users and groups live in the Keycloak realm (lab/templates/keycloak-realm.json.j2).
+# ---------------------------------------------------------------- OAuth (Grafana, Argo CD <-> Keycloak)
+# Users and groups live in the Keycloak realm (lab/templates/keycloak-realm.json.j2). One OAuth client each.
 # Group -> Grafana org/role:  grafana-admins -> Grafana server admin + Admin in all orgs,
 #                             tenant-<name>  -> Editor in the org of that tenant
+# Group -> Argo CD role:      argocd-admins  -> role:admin  (everyone else: no access)
+# Both still have their local admin as a fallback (Grafana: /login?disableAutoLogin=true).
 oauth:
   enabled: true
   hostname: keycloak.company.org               # not under <domain>: runs on the Ansible host, not behind the VIP
   host_ip: "{{ external_host_ip }}"            # optional: adds a hostAliases entry for hostname to Grafana's pods
   issuer: http://keycloak.company.org:8080/realms/lgtm
   client_id: grafana
+  argocd_client_id: argocd
+  argocd_admin_groups: [argocd-admins]
+  # argocd_readonly_groups: [...]
 oauth_client_secret: >-
   {{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}
+argocd_oauth_client_secret: >-
+  {{ lookup('password', secrets_dir + '/argocd_oauth_client_secret chars=ascii_letters,digits length=40') }}
 keycloak_admin_password: >-
   {{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}
 # lab users of the realm (password files in .secrets/keycloak_user_<name>)
 keycloak_users:
-  - { name: admin-user, email: admin@example.corp, groups: [grafana-admins] }
+  - { name: admin-user, email: admin@example.corp, groups: [grafana-admins, argocd-admins] }
   - { name: alice, email: alice@example.corp, groups: [tenant-demo] }
   - { name: bob, email: bob@example.corp, groups: [tenant-platform] }

@@ -1,18 +1,30 @@
-# The LVM volume group TopoLVM provisions PersistentVolumes from: one whole disk per node (topolvm_disk, e.g.
-# /dev/disk/by-id/...). Created once and kept on re-runs; Garage leaves this disk alone (topolvm_disk_name).
+# The LVM volume group TopoLVM provisions PersistentVolumes from: one whole disk per node, set PER HOST because
+# disks differ between servers: topolvm_disk = a name in /dev/disk/by-id (e.g. nvme-Micron_7450_..._2223XYZ)
+# or a full path. ansible/disks.yml lists the disks and suggests one. Created once and kept on re-runs; Garage
+# leaves this disk alone (topolvm_disk_name).
+- name: Expect topolvm_disk for this host
+  ansible.builtin.assert:
+    that: topolvm_disk | default('') | length > 0
+    fail_msg: >-
+      topolvm_disk is not set for {{ inventory_hostname }}: set it per host (host_vars or hosts.yml) to a name in
+      /dev/disk/by-id - ansible-playbook -i <inventory> ansible/disks.yml suggests one
+    quiet: true
+
 - name: Resolve the TopoLVM disk (a /dev/disk/by-id link or the device itself)
-  ansible.builtin.stat: { path: "{{ topolvm_disk }}", follow: false }
+  ansible.builtin.stat: { path: "{{ topolvm_disk_path }}", follow: false }
   register: topolvm_disk_stat
+  vars:
+    topolvm_disk_path: "{{ topolvm_disk if topolvm_disk.startswith('/') else '/dev/disk/by-id/' ~ topolvm_disk }}"
 
 - name: Kernel name of the TopoLVM disk (excluded from Garage)
   ansible.builtin.set_fact:
-    topolvm_disk_name: "{{ (topolvm_disk_stat.stat.lnk_source | default(topolvm_disk)) | basename }}"
+    topolvm_disk_name: "{{ (topolvm_disk_stat.stat.lnk_source | default(topolvm_disk_stat.stat.path)) | basename }}"
   when: topolvm_disk_stat.stat.exists
 
 - name: Expect the TopoLVM disk
   ansible.builtin.assert:
     that: topolvm_disk_name is defined and topolvm_disk_name in ansible_facts.devices
-    fail_msg: "topolvm_disk {{ topolvm_disk }} is not a disk on this node"
+    fail_msg: "topolvm_disk {{ topolvm_disk }} is not a disk on this node (ansible/disks.yml lists them)"
     quiet: true
 
 - name: Volume group

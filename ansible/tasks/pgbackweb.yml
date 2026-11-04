@@ -1,0 +1,134 @@
+# PG Back Web (argocd/platform/templates/pgbackweb.yaml) has no API, so its web forms are used, once each:
+#   login         admin@<domain>, password in .secrets/pgbackweb_admin_password
+#   database      "grafana"  -> Grafana's PostgreSQL (owner credentials from Secret grafana-db-app)
+#   destination   "garage"   -> Garage S3, bucket pgbackweb
+#   backup        "grafana-daily": pg_dump at 03:00 UTC, kept pgbackweb_retention_days days; the dumps drop
+#                 and recreate every object (--clean --if-exists), so a restore rolls the database back
+# What exists already is read from PG Back Web's own database (pgbackweb in grafana-db).
+- name: PG Back Web
+  vars:
+    pbw: "http://{{ ingress_vip }}"
+    pbw_headers: { Host: "pgbackweb.{{ domain }}" }
+    pbw_email: "admin@{{ domain }}"
+    psql: >-
+      {{ kubectl }} -n lgtm exec {{ grafana_db_primary.stdout }} -c postgres --
+      psql -d pgbackweb -tAc
+  block:
+    - name: Wait for PG Back Web
+      ansible.builtin.uri: { url: "{{ pbw }}/api/v1/health", headers: "{{ pbw_headers }}" }
+      register: pbw_health
+      until: pbw_health.status == 200
+      retries: 30
+      delay: 10
+
+    - name: First user (only on a fresh installation; redirects to the login page afterwards)
+      ansible.builtin.uri:
+        url: "{{ pbw }}/auth/create-first-user"
+        method: POST
+        headers: "{{ pbw_headers }}"
+        body_format: form-urlencoded
+        body:
+          name: admin
+          email: "{{ pbw_email }}"
+          password: "{{ pgbackweb_admin_password }}"
+          password_confirmation: "{{ pgbackweb_admin_password }}"
+        follow_redirects: none
+        status_code: [200, 302]
+      register: pbw_first_user
+      changed_when: pbw_first_user.status == 200 and 'already' not in pbw_first_user.content | default('')
+      no_log: true
+
+    - name: Log in
+      ansible.builtin.uri:
+        url: "{{ pbw }}/auth/login"
+        method: POST
+        headers: "{{ pbw_headers }}"
+        body_format: form-urlencoded
+        body: { email: "{{ pbw_email }}", password: "{{ pgbackweb_admin_password }}" }
+        follow_redirects: none
+        status_code: [200, 302]
+      register: pbw_login
+      failed_when: pbw_login.cookies | length == 0
+      no_log: true
+
+    - name: Primary instance of grafana-db
+      ansible.builtin.command: >-
+        {{ kubectl }} -n lgtm get pods -l cnpg.io/cluster=grafana-db,cnpg.io/instanceRole=primary
+        -o jsonpath={.items[0].metadata.name}
+      register: grafana_db_primary
+      changed_when: false
+
+    - name: What PG Back Web has already
+      ansible.builtin.command: >-
+        {{ psql }} "select 'database:' || name from databases union all select 'destination:' || name from
+        destinations union all select 'backup:' || name from backups"
+      register: pbw_existing
+      changed_when: false
+
+    - name: Password of Grafana's database owner
+      ansible.builtin.command: "{{ kubectl }} -n lgtm get secret grafana-db-app -o jsonpath={.data.password}"
+      register: grafana_db_password
+      changed_when: false
+      no_log: true
+
+    - name: Database "grafana" and destination "garage"
+      ansible.builtin.uri:
+        url: "{{ pbw }}/dashboard/{{ item.kind }}s"
+        method: POST
+        headers: "{{ pbw_headers | combine({'Cookie': pbw_login.cookies_string}) }}"
+        body_format: form-urlencoded
+        body: "{{ item.form }}"
+        status_code: [200, 302]
+      when: (item.kind ~ ':' ~ item.form.name) not in pbw_existing.stdout_lines
+      loop:
+        - kind: database
+          form:
+            name: grafana
+            version: "18"
+            connection_string: >-
+              postgresql://grafana:{{ grafana_db_password.stdout | b64decode | urlencode
+              }}@grafana-db-rw.lgtm.svc:5432/grafana?sslmode=require
+        - kind: destination
+          form:
+            name: garage
+            bucket_name: pgbackweb
+            access_key: "{{ s3_access_key_id }}"
+            secret_key: "{{ s3_secret_access_key }}"
+            region: garage
+            endpoint: "http://{{ s3_endpoint }}"
+      loop_control: { label: "{{ item.kind }} {{ item.form.name }}" }
+      changed_when: true
+      no_log: true
+
+    - name: Ids of the database and the destination
+      ansible.builtin.command: >-
+        {{ psql }} "select (select id from databases where name = 'grafana') || ' ' ||
+        (select id from destinations where name = 'garage')"
+      register: pbw_ids
+      changed_when: false
+
+    - name: Daily backup "grafana-daily"
+      ansible.builtin.uri:
+        url: "{{ pbw }}/dashboard/backups"
+        method: POST
+        headers: "{{ pbw_headers | combine({'Cookie': pbw_login.cookies_string}) }}"
+        body_format: form-urlencoded
+        body:
+          database_id: "{{ pbw_ids.stdout.split()[0] }}"
+          destination_id: "{{ pbw_ids.stdout.split()[1] }}"
+          is_local: "false"
+          name: grafana-daily
+          cron_expression: "0 3 * * *"
+          time_zone: UTC
+          is_active: "true"
+          dest_dir: /grafana
+          retention_days: "{{ pgbackweb_retention_days | default(7) }}"
+          opt_data_only: "false"
+          opt_schema_only: "false"
+          opt_clean: "true"
+          opt_if_exists: "true"
+          opt_create: "false"
+          opt_no_comments: "false"
+        status_code: [200, 302]
+      when: "'backup:grafana-daily' not in pbw_existing.stdout_lines"
+      changed_when: true

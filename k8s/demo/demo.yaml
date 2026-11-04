@@ -23,7 +23,7 @@ spec:
       containers:
         - name: app
           image: lgtm.local/demo:1.0.0
-          imagePullPolicy: Never
+          imagePullPolicy: Always       # demo.yml re-pushes the same tag
           envFrom: [{ configMapRef: { name: telemetry } }]
           env:
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
@@ -57,7 +57,7 @@ spec:
       containers:
         - name: app
           image: lgtm.local/demo:1.0.0
-          imagePullPolicy: Never
+          imagePullPolicy: Always       # demo.yml re-pushes the same tag
           envFrom: [{ configMapRef: { name: telemetry } }]
           env:
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }

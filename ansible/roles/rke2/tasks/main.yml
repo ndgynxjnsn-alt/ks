@@ -1,4 +1,4 @@
-# RKE2 server in air-gap mode: tarball install + every container image preloaded from artifacts/.
+# RKE2 server in air-gap mode: tarball install + RKE2's image bundles; all other images from the artifact repository.
 - name: Kernel settings (inotify for Alloy/Loki)
   ansible.posix.sysctl: { name: "{{ item.key }}", value: "{{ item.value }}", sysctl_file: /etc/sysctl.d/90-lgtm.conf }
   loop: "{{ {'fs.inotify.max_user_instances': 1024, 'fs.inotify.max_user_watches': 1048576} | dict2items }}"
@@ -13,56 +13,44 @@
 
 - name: Create directories
   ansible.builtin.file: { path: "{{ item }}", state: directory, mode: "0755" }
-  tags: [images]
   loop: [/root/rke2-artifacts, /etc/rancher/rke2, "{{ rke2_images_dir }}", /var/lib/rancher/rke2/server/manifests]
 
 - name: Copy RKE2 tarball and install script
   ansible.builtin.copy: { src: "{{ artifacts_dir }}/rke2/{{ item }}", dest: /root/rke2-artifacts/, mode: "0644" }
   loop: [install.sh, rke2.linux-amd64.tar.gz, sha256sum-amd64.txt]
 
-# RKE2 imports every archive in agent/images at start. Archives are only copied (and imported into a running
-# containerd) when their image is not on the node yet, so re-runs don't move gigabytes around.
-# Ship new images to a running cluster without touching anything else:  site.yml --tags images
+# RKE2's own images (Kubernetes, canal, Traefik, ...) come with the air-gap bundles, imported at start; all
+# other images are pulled from the artifact repository (registries.yaml).
 - name: RKE2 air-gap bundles
   ansible.builtin.copy: { src: "{{ item }}", dest: "{{ rke2_images_dir }}/", mode: "0644" }
   loop: "{{ query('fileglob', artifacts_dir + '/rke2/rke2-images-*.tar.zst') }}"
   loop_control: { label: "{{ item | basename }}" }
-  tags: [images]
 
-- name: Images already in containerd
-  ansible.builtin.command: >-
-    /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock images -o json
-  register: rke2_crictl_images
-  changed_when: false
-  failed_when: false   # fresh node: RKE2 (and containerd) not installed or not running yet
-  tags: [images]
+- name: Image archives shipped by earlier versions of this role
+  ansible.builtin.find:
+    paths: "{{ rke2_images_dir }}"
+    patterns: ["*.tar.zst", "*.tar"]
+    excludes: ["rke2-images-*"]
+  register: rke2_old_archives
 
-- name: Copy missing image archives
-  ansible.builtin.copy:
-    src: "{{ artifacts_dir }}/images/{{ item.file }}"
-    dest: "{{ rke2_images_dir }}/"
-    mode: "0644"
-  loop: "{{ rke2_image_index | rejectattr('ref', 'in', present_images) }}"
-  loop_control: { label: "{{ item.ref }}" }
+- name: Remove them (RKE2 would import them on every start)
+  ansible.builtin.file: { path: "{{ item.path }}", state: absent }
+  loop: "{{ rke2_old_archives.files }}"
+  loop_control: { label: "{{ item.path | basename }}" }
+
+- name: CA of the artifact repository
+  ansible.builtin.copy: { src: "{{ registry.ca_file }}", dest: /etc/rancher/rke2/registry-ca.crt, mode: "0644" }
+  when: registry.ca_file is defined
+  notify: Restart RKE2
+
+- name: Pull images through the artifact repository (containerd mirrors)
+  ansible.builtin.template: { src: registries.yaml.j2, dest: /etc/rancher/rke2/registries.yaml, mode: "0600" }
   vars:
-    rke2_image_index: "{{ lookup('file', artifacts_dir + '/images/index.yml') | from_yaml }}"
-    present_images: >-
-      {{ ((rke2_crictl_images.stdout | from_json).images | map(attribute='repoTags') | flatten)
-         if rke2_crictl_images.rc == 0 else [] }}
-  register: rke2_preloaded
-  tags: [images]
-
-- name: Import copied images into the running containerd
-  ansible.builtin.shell: >-
-    set -o pipefail;
-    zstd -dc {{ rke2_images_dir }}/{{ item.item.file }} |
-    /var/lib/rancher/rke2/bin/ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import -
-  args: { executable: /bin/bash }
-  changed_when: true
-  loop: "{{ rke2_preloaded.results | selectattr('changed') | list }}"
-  loop_control: { label: "{{ item.item.ref }}" }
-  when: rke2_crictl_images.rc == 0
-  tags: [images]
+    # every source registry of artifacts/images/index.yml, plus lgtm.local (images built here, e.g. demo.yml)
+    rke2_registry_sources: >-
+      {{ (lookup('file', artifacts_dir + '/images/index.yml') | from_yaml | map(attribute='ref')
+          | map('regex_replace', '/.*$', '') | list + ['lgtm.local']) | unique | sort }}
+  notify: Restart RKE2
 
 - name: Install RKE2 from the tarball
   ansible.builtin.command: sh /root/rke2-artifacts/install.sh
