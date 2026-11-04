@@ -27,12 +27,16 @@ spec:
     initdb: { database: grafana, owner: grafana }
   plugins:
     - name: barman-cloud.cloudnative-pg.io
+      enabled: true                         # (the operator's defaults, spelled out so Argo CD sees no drift)
       isWALArchiver: true
       parameters: { barmanObjectName: grafana-db-backups }
   managed:
     roles:
       - name: pgbackweb
+        ensure: present
         login: true
+        inherit: true
+        connectionLimit: -1
         passwordSecret: { name: pgbackweb-db }    # created by Ansible
   affinity:
     enablePodAntiAffinity: true
