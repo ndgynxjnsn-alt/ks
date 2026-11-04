@@ -11,7 +11,7 @@ configs:
       issuer: {{ oauth.issuer }}
       clientID: {{ oauth.argocd_client_id }}
       clientSecret: $argocd-oidc:client-secret
-      requestedScopes: [openid, profile, email, groups]
+      requestedScopes: [openid, profile, email]   # Keycloak: groups claim from a mapper, no scope
       enablePKCEAuthentication: true
   rbac:
     scopes: "[groups]"
