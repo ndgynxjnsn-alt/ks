@@ -13,8 +13,6 @@ configs:
       clientSecret: $argocd-oidc:client-secret
       requestedScopes: [openid, profile, email, groups]
       enablePKCEAuthentication: true
-    # login page: SSO button first, local login de-emphasised (k8s/argocd/login.css, ConfigMap below)
-    ui.cssurl: ./custom/login.css
   rbac:
     scopes: "[groups]"
     policy.default: ""          # IdP users outside the groups below see nothing
@@ -26,18 +24,8 @@ configs:
       g, {{ group }}, role:readonly
 {% endfor %}
 
-server:
-  volumes:
-    - { name: custom-ui, configMap: { name: argocd-custom-ui } }
-  volumeMounts:
-    - { name: custom-ui, mountPath: /shared/app/custom, readOnly: true }
-
-extraObjects:
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata: { name: argocd-custom-ui }
-    data:
-      login.css: {{ lookup('file', repo_dir + '/k8s/argocd/login.css') | to_json }}
+  # login page: SSO button first, local login de-emphasised (the chart mounts it and sets ui.cssurl)
+  styles: {{ lookup('file', repo_dir + '/k8s/argocd/login.css') | to_json }}
 {%   if oauth.host_ip is defined %}
 
 global:
