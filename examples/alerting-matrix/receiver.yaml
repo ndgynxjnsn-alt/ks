@@ -1,0 +1,69 @@
+# UNTESTED example (examples/alerting-matrix/README.md): matrix-alertmanager-receiver in namespace lgtm.
+# Grafana's contact point posts to http://matrix-alert-receiver.lgtm.svc:12345/alerts/<room name>.
+# Air-gapped cluster: push the image to the artifact repository first (download.yml/publish.yml extra_images).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: matrix-alert-receiver
+  namespace: lgtm
+stringData:
+  config.yaml: |
+    http:
+      port: 12345
+      alerts-path-prefix: /alerts
+      metrics-enabled: true                 # /metrics, scrape it with Alloy if you like
+      basic-username: grafana
+      basic-password: CHANGE-ME             # same as in grafana-alerting.yaml
+    matrix:
+      homeserver-url: https://matrix.company.org
+      user-id: "@grafana-alerts:matrix.company.org"
+      access-token: CHANGE-ME
+      room-mapping:                         # /alerts/<name> -> room
+        observability: "!CHANGE-ME:matrix.company.org"
+    templating:
+      # Grafana sends its own URLs; map them if the internal one differs from what people click
+      external-url-mapping:
+        "http://localhost:3000/": https://grafana.lgtm.company.org/
+      firing-template: |
+        <p><strong><font color="#ff0000">FIRING</font></strong> {{ .Alert.Labels.alertname }}
+        {{ with .Alert.Annotations.summary }}- {{ . }}{{ end }}</p>
+        <p>{{ .Alert.Annotations.description }}</p>
+        <p><a href="{{ .Alert.GeneratorURL }}">rule</a>{{ with .Alert.Annotations.runbook_url }} |
+        <a href="{{ . }}">runbook</a>{{ end }}</p>
+      resolved-template: |
+        <p><strong><font color="#00ff00">RESOLVED</font></strong> {{ .Alert.Labels.alertname }}
+        {{ with .Alert.Annotations.summary }}- {{ . }}{{ end }}</p>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matrix-alert-receiver
+  namespace: lgtm
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: matrix-alert-receiver }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: matrix-alert-receiver }
+    spec:
+      containers:
+        - name: receiver
+          image: docker.io/metio/matrix-alertmanager-receiver:2026.9.23
+          args: ["--config-path", "/etc/receiver/config.yaml"]
+          ports: [{ name: http, containerPort: 12345 }]
+          volumeMounts: [{ name: config, mountPath: /etc/receiver, readOnly: true }]
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - { name: config, secret: { secretName: matrix-alert-receiver } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: matrix-alert-receiver
+  namespace: lgtm
+spec:
+  selector: { app.kubernetes.io/name: matrix-alert-receiver }
+  ports: [{ name: http, port: 12345, targetPort: http }]

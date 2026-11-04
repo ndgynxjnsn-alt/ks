@@ -6,19 +6,19 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 * **Offline nodes.** The servers need no internet access. Everything is downloaded once onto the Ansible host
   (`artifacts/`):
   * RKE2 is installed in tarball mode.
-  * All container images are preloaded.
-  * The charts are served to Argo CD from a Helm repository.
+  * Container images and Helm charts are pushed to the company's **artifact repository** (Sonatype Nexus).
+    The nodes pull images from it and Argo CD reads the charts from it.
 * **GitOps.** Ansible prepares the servers and bootstraps **Argo CD**. Argo CD deploys the rest from Git as an
   *app of apps*.
 * **Lab and real site are separated.** `lab/` simulates the servers with Vagrant/libvirt VMs and runs stand-ins for
-  company services: CA, DNS, IdP, Git. The playbooks in `ansible/` are the same for the lab and a real site. Only the
+  company services: CA, DNS, IdP, Git, Nexus. The playbooks in `ansible/` are the same for the lab and a real site. Only the
   inventory differs.
 
 ```
              DNS: *.lgtm.company.org -> ingress VIP                     Kubernetes API -> control-plane VIP
                           │                                                         │
    ┌───── kube-vip (ARP): two floating IPs, each moves to a surviving server ───────┴────────────────┐
-   │  ingress VIP  :80/:443  Traefik -> grafana|loki|tempo|mimir|pyroscope|alloy|faro|garage|argocd|headlamp.<domain> │
+   │  ingress VIP  :80/:443  Traefik -> grafana|loki|tempo|mimir|pyroscope|alloy|faro|garage|argocd|headlamp|pgbackweb │
    │               :5432     Grafana's PostgreSQL (TCP passthrough)                                                 │
    │  control-plane VIP  :6443 API, :9345 RKE2 join                                                     │
    ▼                                   ▼                                   ▼
@@ -29,7 +29,10 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 
  argocd:  Argo CD  ── app of apps (argocd/root) ──▶ everything below
  lgtm:    loki ×3 · mimir ×3 · pyroscope ×3 · tempo ×1 · alloy (DaemonSet) · grafana ×2 · postgres ×3 (CloudNativePG)
+          · pgbackweb ×1
  demo:    shop ×1 ──HTTP──▶ inventory ×1      (Spring Boot + OTel Java agent + Pyroscope)
+
+ outside: Nexus (images, charts) · Git: this repo (Argo CD) + Grafana's dashboard repo (Git Sync) · IdP · CA · DNS
 ```
 
 | Component | Version | Mode / HA |
@@ -47,6 +50,9 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 | Alloy | 1.21.1 (chart 1.14.2) | DaemonSet: OTLP, profiles, pod logs, OTLP/JSON import, cluster metrics |
 | Grafana | 13.2.4 (chart 14.0.1) | 2 replicas on PostgreSQL, one org per tenant, OAuth; Drilldown apps baked into the image |
 | CloudNativePG | operator 1.30.1, PostgreSQL 18.6 | Grafana's database, 3 instances, automatic failover |
+| Barman Cloud plugin | 0.15.1 (chart 0.8.1) | CloudNativePG backups: WAL archive + daily base backup to Garage, 7 days |
+| PG Back Web | 0.5.2 | web UI for pg_dump backups (Garage, 7 days) and restores of Grafana's database |
+| Sonatype Nexus (lab) | 3.98.0 Community | stand-in for the company's artifact repository: Docker + Helm hosted repositories |
 | kube-state-metrics | 2.20.0 (chart 8.6.0) | object state for the "Cluster health" dashboard |
 | TopoLVM | 0.42.0 (chart 17.3.0) | local PersistentVolumes from an LVM volume group per server; default StorageClass |
 | Headlamp | 0.46.0 (chart 0.46.0) | Kubernetes web UI |
@@ -56,29 +62,33 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 
 ```
 ansible/                          the playbooks - identical for the lab and a real site
-  site.yml                        servers: sudo, Garage, OTLP/JSON import dirs, RKE2 (tarball) + kube-vip, kubeconfig
-  lgtm.yml                        Secrets, publish repo + charts, Argo CD, root Application, Grafana tenant orgs
-  demo.yml                        build the demo image, load it on the servers
+  site.yml                        servers: sudo, TopoLVM VG, Garage, OTLP/JSON import dirs, RKE2 + kube-vip, kubeconfig
+  lgtm.yml                        Secrets, push repo, Argo CD, root Application, Grafana orgs + Git Sync, PG Back Web
+  demo.yml                        build the demo image, push it to the artifact repository
   download.yml                    the only online step: RKE2 tarballs, charts, images, plugins -> artifacts/
+  publish.yml                     artifacts/images + charts -> artifact repository (Nexus)
+  disks.yml                       lists/benchmarks the servers' disks, suggests topolvm_disk (read-only)
   group_vars/all.yml              site-independent settings: versions, charts, generated secrets
-  roles/garage, rke2, otel_import
-  tasks/                          apply-set (apply + prune), gitops-publish, grafana-tenants
+  roles/garage, rke2, topolvm, otel_import
+  tasks/                          apply-set (apply + prune), gitops-publish, grafana-*, pgbackweb
   templates/                      secrets, root Application, Grafana datasources
 argocd/
   root/                           app of apps: one Argo CD Application per component
-  platform/                       ingress VIP, ingresses, TLS, Grafana database, dashboards
+  platform/                       ingress VIP, ingresses, TLS, Grafana database + backups, PG Back Web
+grafana/dashboards/               first content of Grafana's Git repository (not deployed from here)
 certs/                            trusted CA certificates (*.pem, *.crt) -> trust-manager -> every namespace
 k8s/values/                       Helm values of every chart (no secrets)
 k8s/alloy/                        Alloy pipeline (config.alloy) and the OTLP/JSON import script
-k8s/argocd/                       Argo CD resource health check (Lua)
+k8s/argocd/                       Argo CD resource health check (Lua), login page styles
 k8s/demo/                         demo app manifests
 apps/demo/                        Spring Boot demo app
 inventories/example/              template for a real site (all site settings)
 lab/                              LAB ONLY
   Vagrantfile                     3 Ubuntu 26.04 VMs, 5 data disks each, isolated networks
   inventory/                      lab servers + lab site settings
-  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea
-  templates/                      their configuration (Keycloak realm, Pebble, BIND, keycloak.env)
+  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea, Nexus
+  tasks/, templates/              their setup and configuration (Nexus API, Grafana repo, Keycloak realm, ...)
+examples/                         apps outside the cluster; alerting-matrix/ (untested sketch)
 docs/s3-storage.md                S3 storage research and decision (Garage)
 ```
 
@@ -87,9 +97,10 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 * Ansible ≥ 2.16 and `ansible-galaxy collection install -r requirements.yml`, `sshpass` (password login),
   `zstd`, `unzip`, `git`, `jq`. Internet access is only needed for `download.yml` and the demo build.
 * No Docker daemon for the cluster: images are fetched with `crane` and built with Jib/`crane append`.
-* Lab: KVM + libvirt + `vagrant-libvirt` (user in group `libvirt`), about 18 GB free RAM (3 × 6 GB VMs; with the
-  Docker Swarm examples another 6 GB, 3 × 2 GB, so 32 GB in the machine for everything at once), and
-  Docker with compose for the stand-in services (`lab/external.yml` uses `sudo docker compose`, pass `-K`).
+* Lab: KVM + libvirt + `vagrant-libvirt` (user in group `libvirt`), about 20 GB free RAM (3 × 6 GB VMs plus
+  ~1.5 GB for Nexus; the Docker Swarm examples need another 6 GB, 3 × 2 GB, which no longer fits next to the cluster
+  in 32 GB), and Docker with compose for the stand-in services (user in group `docker`, or
+  `-e lab_docker_sudo=true -K`).
 
 ## Bring it up (lab)
 
@@ -97,10 +108,12 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 ansible-playbook ansible/download.yml                        # online: everything into artifacts/ (~3 GB)
 (cd lab && vagrant destroy -f)                               # optional: start from scratch
 (cd lab && vagrant up)                                       # 3 bare VMs on isolated networks
-ansible-playbook -i lab/inventory lab/external.yml -K        # Keycloak, Pebble (CA), BIND (DNS), Gitea (Git+Helm)
-ansible-playbook -i lab/inventory ansible/site.yml           # offline: Garage, RKE2 HA + kube-vip, ./kubeconfig
+ansible-playbook -i lab/inventory lab/external.yml           # Keycloak, Pebble (CA), BIND (DNS), Gitea (Git), Nexus
+ansible-playbook -i lab/inventory ansible/publish.yml        # images + charts -> Nexus
+ansible-playbook -i lab/inventory ansible/disks.yml          # optional: the servers' disks, TopoLVM suggestion
+ansible-playbook -i lab/inventory ansible/site.yml           # offline: TopoLVM, Garage, RKE2 HA + kube-vip, ./kubeconfig
 ansible-playbook -i lab/inventory ansible/lgtm.yml           # Argo CD + app of apps -> the whole stack
-ansible-playbook -i lab/inventory ansible/demo.yml           # demo image -> servers (Argo CD deploys the app)
+ansible-playbook -i lab/inventory ansible/demo.yml           # demo image -> Nexus (Argo CD deploys the app)
 (cd examples && docker compose up -d --build)                # optional: example apps on this machine (examples/)
 source scripts/env.sh && k9s                                 # kubectl/helm/k9s with ./kubeconfig
 ```
@@ -111,18 +124,21 @@ Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 10053 graf
 192.168.56.1  keycloak.company.org
 192.168.56.20 grafana.lgtm.company.org loki.lgtm.company.org tempo.lgtm.company.org mimir.lgtm.company.org
 192.168.56.20 pyroscope.lgtm.company.org alloy.lgtm.company.org garage.lgtm.company.org argocd.lgtm.company.org
-192.168.56.20 headlamp.lgtm.company.org faro.lgtm.company.org postgres.lgtm.company.org
+192.168.56.20 headlamp.lgtm.company.org faro.lgtm.company.org postgres.lgtm.company.org pgbackweb.lgtm.company.org
 ```
 
 | URL | What |
 |---|---|
-| https://grafana.lgtm.company.org | Grafana: Keycloak login, or `admin` / `.secrets/grafana_admin_password` |
-| https://argocd.lgtm.company.org | Argo CD: `admin` / Secret `argocd/argocd-initial-admin-secret` |
+| https://grafana.lgtm.company.org | Grafana: goes straight to Keycloak. Local `admin` / `.secrets/grafana_admin_password` at `/login?disableAutoLogin=true` |
+| https://argocd.lgtm.company.org | Argo CD: "Log in via Keycloak", or local `admin` / Secret `argocd/argocd-initial-admin-secret` |
+| https://pgbackweb.lgtm.company.org | PG Back Web: `admin@lgtm.company.org` / `.secrets/pgbackweb_admin_password` |
 | https://headlamp.lgtm.company.org | Headlamp (Kubernetes UI): token from `kubectl -n headlamp create token headlamp` |
 | https://faro.lgtm.company.org/&lt;tenant&gt;/collect | Grafana Faro receiver for browser apps |
 | postgres.lgtm.company.org:5432 | Grafana's PostgreSQL (see [below](#grafanas-postgresql-from-outside-the-cluster)) |
 | https://alloy.lgtm.company.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/*`) and Pyroscope pushes (`/ingest`) |
 | https://{loki,mimir,tempo,pyroscope,garage}.lgtm.company.org | backend APIs (multi-tenant: send `X-Scope-OrgID`) |
+| http://192.168.56.1:8091 | Nexus (lab): `admin` / `.secrets/nexus_admin_password`; Docker registry on `:8092` |
+| https://192.168.56.1:3000 | Gitea (lab): `lgtm` / `.secrets/gitea_password`; repositories `lgtm` and `grafana` |
 
 Everything is also served on plain http. Secrets are generated on first use, one file each in `.secrets/`
 (ignored by git).
@@ -145,10 +161,13 @@ Copy `inventories/example` to `inventories/<site>`, then fill in:
 * two free IPs;
 * the domain;
 * the company CA (ACME URL and EAB credentials);
-* the IdP;
-* the Git and Helm repositories Argo CD reads from.
+* the IdP, with two OAuth clients (Grafana, Argo CD);
+* the artifact repository (`registry`: Docker registry for the nodes, Helm repository for Argo CD);
+* the Git repository Argo CD reads from, and Grafana's own repository (`grafana_git_sync`);
+* per server in `hosts.yml`: `topolvm_disk` (run `disks.yml` to see the disks).
 
-Keep secrets in ansible-vault. Then run `download.yml`, `site.yml` and `lgtm.yml` with `-i inventories/<site>`.
+Keep secrets in ansible-vault. Then run `download.yml`, `publish.yml`, `site.yml` and `lgtm.yml` with
+`-i inventories/<site>`.
 
 Requirements on the servers:
 * Ubuntu 26.04.
@@ -162,8 +181,8 @@ Requirements on the servers:
 1. Creates all **Secrets** (`ansible/templates/secrets.yaml.j2`): S3 keys, Grafana admin and OAuth client,
    ACME EAB key, Garage metrics token, and repository credentials. The values in Git only reference
    them. Loki, Mimir, Tempo and Pyroscope read the S3 keys from environment variables (`-config.expand-env`).
-2. **Publishes** (lab, `gitops.publish`): pushes the committed `HEAD` to Gitea and uploads `artifacts/charts/*.tgz`
-   to Gitea's Helm repository. At a company, CI does this.
+2. **Publishes** (lab, `gitops.publish`): pushes the committed `HEAD` to Gitea. At a company, CI does this. The
+   charts are already in the Helm repository (`publish.yml`).
    **Argo CD deploys what is committed**, and the playbook warns about uncommitted changes.
 3. Installs **Argo CD** with Helm (the only Helm install).
 4. Creates the root Application `lgtm`. It renders `argocd/root` with the site values from the inventory into one
@@ -172,8 +191,8 @@ Requirements on the servers:
 
    | Wave | Apps |
    |---|---|
-   | −3 | cert-manager, CloudNativePG (CRDs) |
-   | −2 | trust-manager; `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster, dashboards |
+   | −3 | cert-manager, CloudNativePG + its Barman Cloud plugin (CRDs) |
+   | −2 | trust-manager, TopoLVM; `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster + backups, PG Back Web |
    | −1 | `certs`: the CA bundle from `certs/` |
    | 0 | Loki, Mimir, Tempo, Pyroscope, kube-state-metrics |
    | 1 | Alloy, Grafana |
@@ -188,7 +207,8 @@ Requirements on the servers:
    ```
    Not synced and healthy after 30 minutes: mimir (Synced/Progressing: Waiting for rollout to finish ...)
    ```
-   Then it creates the Grafana org per tenant through the API.
+   Then it creates the Grafana org per tenant through the API, connects every org to its directory of
+   Grafana's Git repository (Git Sync), and sets up PG Back Web (login, database, S3 destination, daily backup).
 
 To change something, edit, commit and run `lgtm.yml` again, or just push when Argo CD reads your Git server.
 Clusters set up by earlier versions with plain Helm migrate in place: the Helm release records are deleted and
@@ -199,17 +219,65 @@ Argo CD adopts the resources.
 All playbooks can be re-run, and a re-run applies new settings:
 * `lgtm.yml` applies its Secrets and the root app as labelled sets and deletes what is no longer rendered.
   Argo CD prunes everything else; for example, a hostname removed from `lgtm_hosts` removes its ingresses.
-* `site.yml` copies image archives only when containerd on the node lacks the image (`artifacts/images/index.yml`).
-  Partial runs: `--tags images` ships new images, `--tags otel-import` updates the import directories.
-* `demo.yml` loads the image and restarts the pods only when the image ID changed.
+* `publish.yml` pushes only images and charts the artifact repository doesn't have; a chart version is never
+  overwritten.
+* `site.yml`: partial runs `--tags otel-import` (import directories) and `--tags buckets` (new buckets of
+  `garage_buckets`, without the Garage reset).
+* `demo.yml` pushes the image and restarts the pods only when its digest changed.
 * Exception: `site.yml` **resets Garage** on every run.
+
+## Artifact repository (Nexus)
+
+The nodes pull **every** image (except RKE2's own, which come with its air-gap bundles) from the artifact
+repository. `publish.yml` pushes `artifacts/images/*` as `<registry.host>/<source registry>/<path>:<tag>`, e.g.
+`docker.io/grafana/loki:3.7.9` becomes `192.168.56.1:8092/docker.io/grafana/loki:3.7.9`. `site.yml` writes
+`/etc/rancher/rke2/registries.yaml`: one containerd mirror per source registry with a rewrite to that prefix.
+So the manifests keep their upstream image names, and images built here (`lgtm.local/grafana`,
+`lgtm.local/demo`) work the same way.
+
+```yaml
+registry:
+  host: nexus.company.org:5000     # Docker API of the hosted repository
+  ca_file: certs/company-root.crt  # https with a company CA (lab: insecure: true, plain http)
+  username: ...                    # pull credentials, if anonymous read is off
+  publish: { helm_upload_url: https://nexus.company.org/repository/lgtm-helm/, username: ..., password: ... }
+gitops:
+  helm_repo_url: https://nexus.company.org/repository/lgtm-helm/
+```
+
+Lab: Nexus 3.98 Community runs in `lab/external` (UI `:8091`, Docker `:8092`). `lab/external.yml` sets it up
+through the REST API: repositories `lgtm-docker` and `lgtm-helm`, anonymous read, user `lgtm` (role
+`lgtm-publisher`) for pushing. The Community Edition has usage limits (components, requests per day); a company
+Nexus Pro or Harbor works the same way.
 
 ## Storage: TopoLVM
 
 PersistentVolumes (Loki, Mimir, Pyroscope, Grafana's PostgreSQL) are logical volumes on the server where the
 pod runs. **TopoLVM** carves them from the volume group `topolvm`. `site.yml` (`ansible/roles/topolvm`) creates
-that volume group on one whole disk per server, named by `topolvm_disk` in the inventory; a `/dev/disk/by-id/`
-path is the safe choice. Garage takes every other empty disk.
+that volume group on one whole disk per server. Garage takes every other empty disk.
+
+**Which disk?** Every server has its own disks, so `topolvm_disk` is set **per host** in `hosts.yml` (or
+`host_vars/`): a name from `/dev/disk/by-id/` of that server (stable across reboots, unlike `sda`/`nvme0n1`), or
+a full path.
+
+```yaml
+server1: { ansible_host: 10.0.10.11, topolvm_disk: nvme-Micron_7450_MTFDKBA960TFR_2223XXXXXXXX }
+```
+
+`ansible-playbook -i <inventory> ansible/disks.yml` lists every disk of every server: size, SSD/HDD, transport,
+model, what uses it (OS, TopoLVM, Garage, free) and its by-id names. It suggests a disk per server.
+`-e benchmark=true` adds a read-only benchmark (4 KiB random reads for latency, 1 MiB sequential reads for
+throughput, ~8 s per disk).
+
+* **Faster than Garage: yes.** TopoLVM holds the hot path. Loki's, Mimir's and Pyroscope's ingesters write their
+  WAL and head blocks there with an fsync on every write, and PostgreSQL commits there. That load is
+  latency-bound and small: about 7 GB per server with the default sizes. Use the fastest disk (NVMe/SSD), not
+  the biggest.
+* **Garage gets the big, slower disks.** It stores compacted chunks and blocks: written in large batches, read
+  for queries over older data. That load is throughput- and capacity-bound, and HDDs are fine.
+* **Not the OS disk.** etcd lives there (`/var/lib/rancher`) and needs low fsync latency. Ingester WALs on the
+  same disk delay etcd writes, which leads to leader elections and an unstable API. The role also only takes
+  whole disks.
 * StorageClass `topolvm` is the default: `WaitForFirstConsumer`, so the volume is created on the node the pod
   is scheduled to, which TopoLVM picks by free space (storage capacity tracking). Volumes can be expanded.
 * The volume group is created once and kept on re-runs; the disk is **not** wiped again.
@@ -217,7 +285,7 @@ path is the safe choice. Garage takes every other empty disk.
 * Volumes are local: if a server is lost, so are its volumes. The workloads replicate (replication factor
   3, CloudNativePG replicas).
 
-Lab: each VM has a 20 GB disk with the serial `topolvm` (`/dev/disk/by-id/virtio-topolvm`).
+Lab: each VM has a 20 GB disk with the serial `topolvm` (`topolvm_disk: virtio-topolvm` per host).
 
 ## Headlamp
 
@@ -246,6 +314,47 @@ kubectl -n lgtm get secret grafana-db-app -o jsonpath='{.data.password}' | base6
 psql "host=postgres.lgtm.company.org port=5432 dbname=grafana user=grafana sslmode=verify-full sslrootcert=grafana-db-ca.crt"
 ```
 
+## Backups of Grafana's PostgreSQL
+
+Two independent mechanisms write to Garage, each keeping **7 days**:
+
+| | CloudNativePG + Barman Cloud plugin | PG Back Web (https://pgbackweb.&lt;domain&gt;) |
+|---|---|---|
+| What | WAL archive (continuous) + base backup daily at 02:00 | `pg_dump` daily at 03:00 |
+| Bucket | `grafana-db-backups` | `pgbackweb` |
+| Restore to | any point in time, into a **new** cluster | the running database, from a web UI |
+| For | losing the database or all three servers | rolling back a bad change (deleted dashboards, a broken migration) |
+
+CloudNativePG has no UI, so PG Back Web provides one. `lgtm.yml` sets it up completely: login
+`admin@<domain>`, database `grafana`, destination `garage`, and backup `grafana-daily`. Its dumps use
+`--clean --if-exists`, so restoring one replaces every object. PG Back Web is reachable from outside like every
+host (`lgtm_hosts`). Its own data lives in the database `pgbackweb` of the same PostgreSQL cluster.
+
+**Roll back** (PG Back Web): Executions → pick a backup → Restore → database `grafana`. The restore takes
+seconds. Grafana keeps running and may log errors during that time. Afterwards, restart it so no cached state
+survives: `kubectl -n lgtm delete pod -l app.kubernetes.io/name=grafana`. (Tested in the lab by restoring into a
+scratch database: all 91 tables came back.) Dashboards are in Git anyway, so Git Sync restores them on its next
+sync.
+
+**Point-in-time recovery** (CloudNativePG): add a second `Cluster` that bootstraps from the object store,
+check it, then point Grafana at it (or rename it):
+
+```yaml
+spec:
+  bootstrap:
+    recovery:
+      source: grafana-db
+      recoveryTarget: { targetTime: "2026-11-04 18:00:00+00" }   # omit for the latest state
+  externalClusters:
+    - name: grafana-db
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters: { barmanObjectName: grafana-db-backups, serverName: grafana-db }
+```
+
+Status: `kubectl -n lgtm get backups,scheduledbackups` and the condition `ContinuousArchiving` of
+`kubectl -n lgtm get cluster grafana-db -o yaml`.
+
 ## Trusted CA certificates (`certs/`)
 
 Put PEM files of the CAs the cluster should trust (company root and intermediate CAs) into `certs/` as `*.pem`
@@ -265,7 +374,9 @@ Who uses it:
 * Any other pod: mount the ConfigMap `company-ca-bundle` (`optional: true`) as a directory, not with `subPath`
   (`subPath` mounts don't receive updates).
 
-Only public certificates belong there, never private keys.
+Only public certificates belong there, never private keys. CAs that differ per site (the lab's generated CA)
+go into the inventory instead: `trusted_ca_files` (paths on the Ansible host) are added to the same bundle.
+Grafana mounts it too (`SSL_CERT_FILE`), for Git Sync.
 
 ## Networking and TLS
 
@@ -305,21 +416,52 @@ Loki, Mimir, Tempo and Pyroscope are **multi-tenant**: every write and every que
 * **Profiles:** Alloy routes them by the `tenant` label, because `pyroscope.receive_http` doesn't forward headers.
   A new tenant needs its pair of `pyroscope.relabel` and `pyroscope.write` in `k8s/values/alloy.yaml`.
 * **Grafana:** every tenant has an **organization** whose datasources only see that tenant. They're created via the
-  API from `ansible/templates/grafana-datasources.yaml.j2`, with dashboards from `tenants[].dashboards`. The
+  API from `ansible/templates/grafana-datasources.yaml.j2`; their dashboards come from Git (below). The
   **Main org** is for admins and sees all tenants (`demo|platform`). Pyroscope has no cross-tenant queries, so it
   gets one datasource per tenant.
 
-## OAuth (Grafana ↔ IdP)
+## Grafana dashboards from Git (Git Sync)
 
-Grafana logs in with generic OAuth (OIDC, PKCE). The lab IdP is Keycloak (`http://keycloak.company.org:8080`, realm
-`lgtm`, users `admin-user`, `alice` (demo), `bob` (platform); passwords in `.secrets/keycloak_user_<name>`).
+Dashboards and folders live in a **second Git repository** (`grafana_git_sync`), one directory per org:
+`main/`, `<tenant>/`. Grafana's Git Sync (pure Git over https) syncs each directory into the folder **LGTM**
+of its org and commits what is saved in the UI back to the branch (`workflows: [write]`; `[branch]` opens pull
+requests, `[]` is read-only). Neither Argo CD nor Ansible deploys dashboards, so there is exactly one source of
+truth. `lgtm.yml` creates the connection per org once (Administration → Provisioning shows its state).
 
-| IdP group | Grafana |
-|---|---|
-| `grafana-admins` | Grafana server admin, Admin in every org |
-| `tenant-<name>` | Editor in org `<name>` |
+* **Alerts are not synced.** Git Sync only handles dashboards and folders (Grafana 13.2). Alert rules, contact
+  points and policies stay in Grafana's database, which the PostgreSQL backups cover.
+  [examples/alerting-matrix](examples/alerting-matrix) has an untested sketch of a rule that alerts into a
+  Matrix room.
+* Grafana refuses Git servers on private addresses unless they are allowed: `lgtm.yml` sets
+  `[provisioning] allowed_git_urls` to the host of `grafana_git_sync.url`.
+* Git Sync can't take over a dashboard whose UID already exists outside the repository: delete the old one first.
 
-`auto_assign_org` is off, so tenant users never see the Main org, which shows all tenants.
+Lab: repository `grafana` on Gitea (https, lab CA). `lab/external.yml` creates it with the dashboards of
+`grafana/dashboards` (`main/` gets all of them, each tenant its `tenants[].dashboards`), plus an access token
+for Grafana.
+
+## OAuth (Grafana, Argo CD ↔ IdP)
+
+Both log in through the IdP with OIDC (PKCE), each with **its own OAuth client** (`oauth.client_id`,
+`oauth.argocd_client_id`). The lab IdP is Keycloak (`http://keycloak.company.org:8080`, realm `lgtm`, users
+`admin-user`, `alice` (demo), `bob` (platform); passwords in `.secrets/keycloak_user_<name>`).
+`lab/external.yml` keeps an existing realm in step with `lab/templates/keycloak-realm.json.j2`.
+
+| IdP group | Grafana | Argo CD |
+|---|---|---|
+| `grafana-admins` | Grafana server admin, Admin in every org | - |
+| `tenant-<name>` | Editor in org `<name>` | - |
+| `argocd-admins` | - | `role:admin` (`oauth.argocd_admin_groups`) |
+
+Users outside these groups get nothing in Argo CD. `auto_assign_org` is off, so tenant users never see the Main
+org, which shows all tenants.
+
+**SSO first, local admin as the safety valve:**
+* Grafana sends everyone straight to the IdP (`auto_login`). The local login form is still at
+  `https://grafana.<domain>/login?disableAutoLogin=true`.
+* Argo CD has no automatic redirect. Its login page (`k8s/argocd/login.css`) shows a large "Log in via Keycloak"
+  button. Below it, labelled "local admin, only if SSO is down", the username/password form is dimmed until it is
+  used.
 
 ## Self-observability: dashboard "Cluster health"
 
@@ -330,7 +472,7 @@ Alloy (one instance per node, each scrapes only its node) sends cluster metrics 
 * the metrics ports of the LGTM, cert-manager, CloudNativePG, Argo CD and kube-system pods;
 * Alloy itself, plus kube-state-metrics.
 
-The dashboard **Cluster health** (`argocd/platform/dashboards/cluster-health.json`, in the Main and `platform` orgs)
+The dashboard **Cluster health** (`grafana/dashboards/cluster-health.json`, in the Main and `platform` orgs)
 shows:
 * nodes ready, etcd leader, Argo CD app health, pods not ready, restarts, certificate expiry;
 * per-node CPU, memory, disk and network, and usage per namespace;

@@ -1,0 +1,52 @@
+# UNTESTED example (examples/alerting-matrix/README.md), Grafana's alerting provisioning format: a Matrix contact
+# point, a policy that sends every alert there, and one rule (a node is low on memory, from the platform tenant).
+apiVersion: 1
+contactPoints:
+  - orgId: 1                    # the org's id (Administration -> Organizations), e.g. the "platform" tenant
+    name: matrix
+    receivers:
+      - uid: matrix-observability
+        type: webhook
+        settings:
+          url: http://matrix-alert-receiver.lgtm.svc:12345/alerts/observability
+          httpMethod: POST
+          username: grafana
+          password: CHANGE-ME   # basic-password of receiver.yaml
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: matrix
+    group_by: [alertname, instance]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+
+groups:
+  - orgId: 1
+    name: nodes
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: node-memory-low
+        title: Node memory low
+        condition: C
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }}: less than 10% memory available"
+          description: "Available memory is {{ printf \"%.1f\" $values.B.Value }}%."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: mimir            # the Mimir datasource of the org (ansible/templates/grafana-datasources.yaml.j2)
+            model:
+              refId: A
+              expr: 100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: lt, params: [10] } }] }
