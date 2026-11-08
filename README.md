@@ -497,7 +497,6 @@ calls from Tempo traces as balls flying between the services. The topology comes
 * Tempo's search sees traces 2 s after they end (`query_end_cutoff: 2s`, default 30 s), so the replay runs
   about 13 s behind real time.
 * It renders with WebGPU: a current Chrome/Edge (or Firefox with WebGPU), over https.
-  says so.
 * Every open panel polls Tempo on its own (up to 30 traces per second each).
 
 ## Frontend telemetry: Grafana Faro
