@@ -232,11 +232,12 @@ All playbooks can be re-run, and a re-run applies new settings:
 ## Artifact repository (Nexus)
 
 The nodes pull **every** image (except RKE2's own, which come with its air-gap bundles) from the artifact
-repository. `publish.yml` pushes `artifacts/images/*` as `<registry.host>/<source registry>/<path>:<tag>`, e.g.
-`docker.io/grafana/loki:3.7.9` becomes `192.168.56.1:8092/docker.io/grafana/loki:3.7.9`. `site.yml` writes
-`/etc/rancher/rke2/registries.yaml`: one containerd mirror per source registry with a rewrite to that prefix.
-So the manifests keep their upstream image names, and images built here (`lgtm.local/grafana`,
-`lgtm.local/demo`) work the same way.
+repository. Image names and tags are never changed: the manifests and pods use `docker.io/grafana/loki:3.7.9`,
+and in Nexus the image is stored under that same name, `docker.io/grafana/loki` with tag `3.7.9`
+(`publish.yml` pushes `artifacts/images/*` there). `site.yml` writes `/etc/rancher/rke2/registries.yaml`, one
+containerd mirror per source registry: when a pod asks for `docker.io/grafana/loki:3.7.9`, containerd fetches
+it from Nexus instead of Docker Hub. Images built here (`lgtm.local/grafana`, `lgtm.local/demo`) work the
+same way.
 
 ```yaml
 registry:
