@@ -1,7 +1,7 @@
 # The LVM volume group TopoLVM provisions PersistentVolumes from: one whole disk per node, set PER HOST because
 # disks differ between servers: topolvm_disk = a name in /dev/disk/by-id (e.g. nvme-Micron_7450_..._2223XYZ)
 # or a full path. ansible/disks.yml lists the disks and suggests one. Created once and kept on re-runs; Garage
-# leaves this disk alone (topolvm_disk_name).
+# leaves this disk alone (topolvm_disk_name). A disk with other content is only wiped with force_disk_format.
 - name: Expect topolvm_disk for this host
   ansible.builtin.assert:
     that: topolvm_disk | default('') | length > 0
@@ -26,6 +26,58 @@
     that: topolvm_disk_name is defined and topolvm_disk_name in ansible_facts.devices
     fail_msg: "topolvm_disk {{ topolvm_disk }} is not a disk on this node (ansible/disks.yml lists them)"
     quiet: true
+
+- name: Volume group the disk belongs to (empty if none)
+  ansible.builtin.command: pvs --noheadings -o vg_name /dev/{{ topolvm_disk_name }}
+  register: topolvm_disk_vg
+  changed_when: false
+  failed_when: false        # not a physical volume at all
+
+- name: Filesystems, partitions and mounts on the disk
+  ansible.builtin.command: lsblk -J -o NAME,TYPE,FSTYPE,MOUNTPOINTS /dev/{{ topolvm_disk_name }}
+  register: topolvm_disk_lsblk
+  changed_when: false
+
+- name: What is on the disk
+  ansible.builtin.set_fact:
+    topolvm_disk_is_ours: "{{ topolvm_disk_vg.stdout | trim == topolvm_vg }}"
+    topolvm_disk_other_vg: "{{ topolvm_disk_vg.stdout | trim if topolvm_disk_vg.stdout | trim != topolvm_vg else '' }}"
+    topolvm_disk_content: "{{ (devices | map(attribute='fstype') | select | list)
+                              + ((devices | length > 1) | ternary(['partitions'], [])) }}"
+    topolvm_disk_mounts: "{{ devices | map(attribute='mountpoints') | flatten | select | list }}"
+  vars:
+    disk: "{{ (topolvm_disk_lsblk.stdout | from_json).blockdevices[0] }}"
+    devices: "{{ [disk] + disk.children | default([]) }}"
+
+- name: Refuse a disk that holds something else (without force_disk_format)
+  ansible.builtin.assert:
+    that: topolvm_disk_is_ours or topolvm_disk_content | length == 0 or force_disk_format | bool
+    fail_msg: >-
+      {{ topolvm_disk }} ({{ topolvm_disk_name }}) is not empty: {{ topolvm_disk_content | join(', ') }}{{
+      (', mounted at ' ~ topolvm_disk_mounts | join(', ')) if topolvm_disk_mounts else '' }}.
+      To wipe it for TopoLVM: ansible-playbook ... site.yml -e force_disk_format=true  (ERASES the disk)
+    quiet: true
+
+- name: Wipe the disk for TopoLVM (force_disk_format)
+  when: not topolvm_disk_is_ours and topolvm_disk_content | length > 0 and force_disk_format | bool
+  block:
+    - name: Unmount it and remove its fstab entries
+      ansible.posix.mount: { path: "{{ item }}", state: absent }
+      loop: "{{ topolvm_disk_mounts }}"
+
+    - name: Deactivate the volume group that was on it
+      ansible.builtin.command: vgchange -an {{ topolvm_disk_other_vg }}
+      when: topolvm_disk_other_vg | length > 0
+      changed_when: true
+
+    - name: Erase signatures of partitions, filesystems, LVM and the partition table
+      ansible.builtin.shell: |
+        set -eo pipefail
+        for p in $(lsblk -nr -o NAME /dev/{{ topolvm_disk_name }} | tail -n +2); do wipefs -a -f /dev/$p; done
+        wipefs -a -f /dev/{{ topolvm_disk_name }}
+        partprobe /dev/{{ topolvm_disk_name }} 2>/dev/null || true
+      args: { executable: /bin/bash }
+      changed_when: true
 
 - name: Volume group
   community.general.lvg: { vg: "{{ topolvm_vg }}", pvs: ["/dev/{{ topolvm_disk_name }}"] }

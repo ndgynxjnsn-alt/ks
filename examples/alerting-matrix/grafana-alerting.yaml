@@ -39,7 +39,7 @@ groups:
         data:
           - refId: A
             relativeTimeRange: { from: 600, to: 0 }
-            datasourceUid: mimir            # the Mimir datasource of the org (ansible/templates/grafana-datasources.yaml.j2)
+            datasourceUid: mimir            # the org's Mimir datasource (ansible/templates/grafana-datasources.yaml.j2)
             model:
               refId: A
               expr: 100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes

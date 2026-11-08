@@ -28,6 +28,10 @@ tempo:
       protocols:
         grpc: { endpoint: "0.0.0.0:4317" }
         http: { endpoint: "0.0.0.0:4318" }
+  # Search sees traces 2 s after they end instead of 30 s (default), so live views such as the trace-pong
+  # panel (dashboard "Live traffic") run close to real time.
+  queryFrontend:
+    query_end_cutoff: 2s
   # Service graph + span metrics (RED) are written to Mimir.
   metricsGenerator:
     enabled: true

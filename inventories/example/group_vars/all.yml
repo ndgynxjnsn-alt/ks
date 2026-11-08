@@ -11,17 +11,42 @@ grafana_db_external: true   # Grafana's PostgreSQL on <ingress_vip>:5432 (postgr
 # ---------------------------------------------------------------- storage
 # topolvm_disk is set per host in hosts.yml (the disks differ between servers); ansible/disks.yml suggests one.
 
+# ---------------------------------------------------------------- company services
+nexus_host: nexus.company.org     # artifact repository (Docker registry + Helm repository)
+git_host: git.company.org         # Git server: this repository (Argo CD) and Grafana's dashboards (Git Sync)
+
+# ---------------------------------------------------------------- artifact repository
+# ansible/publish.yml pushes artifacts/ there; the nodes pull every image through it (containerd mirrors),
+# Argo CD reads the charts from it.
+registry:
+  host: "{{ nexus_host }}:5000"            # Docker API of the hosted Docker repository (Nexus: its HTTP(S) connector)
+  # ca_file: "{{ repo_dir }}/certs/company-root.crt"   # if its certificate isn't publicly trusted
+  # username / password                    # pull credentials, if anonymous read is off
+  publish:
+    helm_upload_url: "https://{{ nexus_host }}/repository/lgtm-helm/"
+    username: lgtm-publisher
+    password: "{{ vault_nexus_password }}"
+
 # ---------------------------------------------------------------- GitOps (Argo CD)
-# The cluster must reach both: this repository (e.g. a GitLab mirror) and a Helm repository holding
-# artifacts/charts (e.g. Harbor/Nexus; push them with CI or `helm push`).
 gitops:
-  repo_url: https://gitlab.company.org/observability/lgtm.git
+  repo_url: "https://{{ git_host }}/observability/lgtm.git"
   revision: main
-  helm_repo_url: https://harbor.company.org/chartrepo/lgtm
+  helm_repo_url: "https://{{ nexus_host }}/repository/lgtm-helm/"
   repo_username: argocd                               # optional: read access for Argo CD
-  repo_password: "{{ vault_gitlab_token }}"
+  repo_password: "{{ vault_git_token }}"
   # helm_username / helm_password: optional
   # publish: {...}                                    # optional: let lgtm.yml push (see lab inventory)
+
+# trusted_ca_files: []    # CAs to trust that are not in certs/ (paths on the Ansible host)
+
+# ---------------------------------------------------------------- Grafana Git Sync
+# Dashboards per Grafana org (directories main/, <tenant>/) in their own repository; Grafana commits UI saves.
+grafana_git_sync:
+  url: "https://{{ git_host }}/observability/grafana-dashboards.git"
+  branch: main
+  token_user: grafana-git-sync                        # owner of the token (write access to the repository)
+  token: "{{ vault_grafana_git_token }}"
+  workflows: [write]
 
 # ---------------------------------------------------------------- tenants
 tenants:

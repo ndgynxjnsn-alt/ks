@@ -31,8 +31,9 @@
     - name: Download RKE2 tarball, air-gap images and install script
       ansible.builtin.get_url:
         url: "{{ item }}"
-        dest: "{{ artifacts_dir }}/rke2/"
+        dest: "{{ artifacts_dir }}/rke2/{{ item | basename }}"
         mode: "0644"
+      when: (artifacts_dir ~ '/rke2/' ~ item | basename) is not file   # get_url would ask the server again
       loop:
         - https://get.rke2.io/install.sh
         - "{{ rke2_url }}/rke2.linux-amd64.tar.gz"
@@ -42,6 +43,7 @@
 
     - name: Download garage, kubectl
       ansible.builtin.get_url: { url: "{{ item.url }}", dest: "{{ artifacts_dir }}/bin/{{ item.name }}", mode: "0755" }
+      when: (artifacts_dir ~ '/bin/' ~ item.name) is not file
       loop:
         - name: garage
           url: "https://garagehq.deuxfleurs.fr/_releases/{{ garage_version }}/x86_64-unknown-linux-musl/garage"
@@ -174,13 +176,20 @@
       vars:
         wanted: "{{ lookup('template', 'templates/images-index.yml.j2') | from_yaml | map(attribute='file') | list }}"
 
-    # ------------------------------------------------------------ Grafana with Drilldown plugins baked in
-    - name: Download Grafana Drilldown plugins
+    # ------------------------------------------------------------ Grafana with its plugins baked in
+    - name: Download the Grafana plugins
       ansible.builtin.get_url:
-        url: "https://grafana.com/api/plugins/{{ item.id }}/versions/{{ item.version }}/download"
+        url: "{{ item.url | default(grafana_com ~ item.id ~ '/versions/' ~ item.version ~ '/download') }}"
         dest: "{{ artifacts_dir }}/plugins/{{ item.id }}-{{ item.version }}.zip"
         mode: "0644"
+      vars:
+        grafana_com: https://grafana.com/api/plugins/
       loop: "{{ grafana_plugins }}"
+      when: (artifacts_dir ~ '/plugins/' ~ item.id ~ '-' ~ item.version ~ '.zip') is not file
+      register: plugin_download
+      until: plugin_download is succeeded     # GitHub release downloads answer 504 now and then
+      retries: 5
+      delay: 10
 
     - name: Build the Grafana image (base image + plugin layer in plugins-bundled)
       ansible.builtin.shell:

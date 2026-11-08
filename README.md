@@ -56,6 +56,7 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 | kube-state-metrics | 2.20.0 (chart 8.6.0) | object state for the "Cluster health" dashboard |
 | TopoLVM | 0.42.0 (chart 17.3.0) | local PersistentVolumes from an LVM volume group per server; default StorageClass |
 | Headlamp | 0.46.0 (chart 0.46.0) | Kubernetes web UI |
+| trace-pong | 1.3.0 (Grafana panel plugin, unsigned) | live service traffic from Tempo traces on the service graph (dashboard "Live traffic") |
 | OS | Ubuntu 26.04 LTS | `sudo-rs` replaced by classic sudo (Ansible's become can't drive sudo-rs) |
 
 ## Repository layout
@@ -162,6 +163,8 @@ Copy `inventories/example` to `inventories/<site>`, then fill in:
 * the domain;
 * the company CA (ACME URL and EAB credentials);
 * the IdP, with two OAuth clients (Grafana, Argo CD);
+* the hosts of the company services: `nexus_host` (artifact repository) and `git_host` (Git server), e.g.
+  `nexus.company.org`. The lab sets both to the Ansible host's IP (`lab_host_ip`), where the stand-ins run;
 * the artifact repository (`registry`: Docker registry for the nodes, Helm repository for Argo CD);
 * the Git repository Argo CD reads from, and Grafana's own repository (`grafana_git_sync`);
 * per server in `hosts.yml`: `topolvm_disk` (run `disks.yml` to see the disks).
@@ -281,6 +284,10 @@ throughput, ~8 s per disk).
 * StorageClass `topolvm` is the default: `WaitForFirstConsumer`, so the volume is created on the node the pod
   is scheduled to, which TopoLVM picks by free space (storage capacity tracking). Volumes can be expanded.
 * The volume group is created once and kept on re-runs; the disk is **not** wiped again.
+* A disk that already holds something (a filesystem, partitions, another volume group, e.g. because Garage
+  formatted it before it became the TopoLVM disk) is refused with a message saying what is on it.
+  `site.yml -e force_disk_format=true` unmounts it, removes its fstab entries and wipes it. A disk that already
+  is the TopoLVM volume group is never wiped, even with the flag.
 * `local-path` (RKE2) is still installed, but no longer the default.
 * Volumes are local: if a server is lost, so are its volumes. The workloads replicate (replication factor
   3, CloudNativePG replicas).
@@ -478,6 +485,20 @@ shows:
 * per-node CPU, memory, disk and network, and usage per namespace;
 * scrape targets, ingest rate per signal, ring health;
 * Garage health and capacity, PostgreSQL replication lag.
+
+## Live traffic: trace-pong
+
+The dashboard **Live traffic** (`grafana/dashboards/live-traffic.json`, in the Main and `demo` orgs) holds one
+[trace-pong](https://github.com/ndgynxjnsn-alt/trace-pong) panel. It draws the service graph and replays real
+calls from Tempo traces as balls flying between the services. The topology comes from
+`traces_service_graph_*` in Mimir (Tempo's metrics-generator), and the traffic from Tempo's search.
+* The plugin is baked into the Grafana image like the Drilldown apps (`grafana_plugins`, with a `url` because it
+  isn't on grafana.com). It is unsigned and allowed by id (`plugins.allow_loading_unsigned_plugins`).
+* Tempo's search sees traces 2 s after they end (`query_end_cutoff: 2s`, default 30 s), so the replay runs
+  about 13 s behind real time.
+* It renders with WebGPU: a current Chrome/Edge (or Firefox with WebGPU) over https.X
+  says so.
+* Every open panel polls Tempo on its own (up to 30 traces per second each).
 
 ## Frontend telemetry: Grafana Faro
 

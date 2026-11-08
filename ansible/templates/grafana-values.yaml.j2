@@ -1,5 +1,7 @@
 # {{ ansible_managed }}
 # Site-specific Grafana values, merged over k8s/values/grafana.yaml by the root app.
+image:
+  tag: "{{ grafana_image.split(':')[-1] }}"   # the image built by download.yml
 {% set tenant_names = tenants | map(attribute='name') | list %}
 grafana.ini:
   server:

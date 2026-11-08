@@ -7,7 +7,7 @@ fullnameOverride: grafana
 image:
   registry: lgtm.local
   repository: grafana
-  tag: 13.2.4-drilldown
+  # tag: from grafana_image (ansible/group_vars/all.yml), set by the site overlay
   pullPolicy: IfNotPresent
 replicas: 2
 headlessService: true    # peer discovery for unified alerting HA (ha_peers below)
@@ -56,7 +56,8 @@ grafana.ini:
     check_for_updates: false
     check_for_plugin_updates: false
   plugins:
-    preinstall_disabled: true   # offline: the Drilldown apps ship in plugins-bundled
+    preinstall_disabled: true   # offline: the Drilldown apps and trace-pong ship in plugins-bundled
+    allow_loading_unsigned_plugins: tracepong-live-panel
   news:
     news_feed_enabled: false    # "Latest from the blog" on the home dashboard needs grafana.com/news.xml (offline)
   feature_toggles:            # individual entries (feature_toggles.enable is deprecated)

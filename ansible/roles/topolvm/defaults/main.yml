@@ -1,1 +1,5 @@
 topolvm_vg: topolvm   # volume group for TopoLVM (k8s/values/topolvm.yaml: lvmd.deviceClasses)
+# A disk that already carries a filesystem, partitions or another volume group is refused. true: unmount it,
+# remove its fstab entries and wipe it (e.g. a disk Garage formatted before it became the TopoLVM disk).
+# A disk that already is the TopoLVM volume group is never wiped. Per run: site.yml -e force_disk_format=true
+force_disk_format: false   # noqa: var-naming[no-role-prefix] - a site-wide switch, named for the CLI

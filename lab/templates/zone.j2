@@ -2,6 +2,6 @@
 $TTL 60
 @   IN SOA ns.{{ domain }}. hostmaster.{{ domain }}. ( 1 60 60 3600 60 )
 @   IN NS  ns.{{ domain }}.
-ns  IN A   {{ external_host_ip }}
+ns  IN A   {{ lab_host_ip }}
 @   IN A   {{ ingress_vip }}
 *   IN A   {{ ingress_vip }}
