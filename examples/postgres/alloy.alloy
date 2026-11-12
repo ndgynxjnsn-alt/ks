@@ -80,15 +80,24 @@ otelcol.processor.transform "pg" {
       `set(time, Time(attributes["timestamp"], "%Y-%m-%d %H:%M:%S.%f %Z")) where attributes["timestamp"] != nil`,
       `set(observed_time, time) where attributes["timestamp"] != nil`,
 
-      `set(severity_text, ToUpperCase(attributes["error_severity"])) where attributes["error_severity"] != nil`,
-      `set(severity_number, SEVERITY_NUMBER_DEBUG)  where IsMatch(severity_text, "^DEBUG")`,
-      `set(severity_number, SEVERITY_NUMBER_INFO)   where severity_text == "INFO"`,
-      `set(severity_number, SEVERITY_NUMBER_INFO2)  where severity_text == "NOTICE"`,
-      `set(severity_number, SEVERITY_NUMBER_INFO4)  where severity_text == "LOG"`,
-      `set(severity_number, SEVERITY_NUMBER_WARN)   where severity_text == "WARNING"`,
-      `set(severity_number, SEVERITY_NUMBER_ERROR)  where severity_text == "ERROR"`,
-      `set(severity_number, SEVERITY_NUMBER_FATAL)  where severity_text == "FATAL"`,
-      `set(severity_number, SEVERITY_NUMBER_FATAL4) where severity_text == "PANIC"`,
+      // PostgreSQL's own level stays as postgresql.severity (LOG, NOTICE, WARNING, ...). severity_text gets the
+      // standard names, because Loki derives detected_level from it and Grafana only knows those levels:
+      // "LOG" would show as an unknown level.
+      `set(attributes["postgresql.severity"], ToUpperCase(attributes["error_severity"])) where attributes["error_severity"] != nil`,
+      `set(cache["sev"], attributes["postgresql.severity"])`,
+      `set(severity_number, SEVERITY_NUMBER_DEBUG)  where cache["sev"] != nil and IsMatch(cache["sev"], "^DEBUG")`,
+      `set(severity_number, SEVERITY_NUMBER_INFO)   where cache["sev"] == "INFO"`,
+      `set(severity_number, SEVERITY_NUMBER_INFO2)  where cache["sev"] == "NOTICE"`,
+      `set(severity_number, SEVERITY_NUMBER_INFO4)  where cache["sev"] == "LOG"`,
+      `set(severity_number, SEVERITY_NUMBER_WARN)   where cache["sev"] == "WARNING"`,
+      `set(severity_number, SEVERITY_NUMBER_ERROR)  where cache["sev"] == "ERROR"`,
+      `set(severity_number, SEVERITY_NUMBER_FATAL)  where cache["sev"] == "FATAL"`,
+      `set(severity_number, SEVERITY_NUMBER_FATAL4) where cache["sev"] == "PANIC"`,
+      `set(severity_text, "DEBUG") where severity_number >= SEVERITY_NUMBER_DEBUG and severity_number < SEVERITY_NUMBER_INFO`,
+      `set(severity_text, "INFO")  where severity_number >= SEVERITY_NUMBER_INFO and severity_number < SEVERITY_NUMBER_WARN`,
+      `set(severity_text, "WARN")  where severity_number >= SEVERITY_NUMBER_WARN and severity_number < SEVERITY_NUMBER_ERROR`,
+      `set(severity_text, "ERROR") where severity_number >= SEVERITY_NUMBER_ERROR and severity_number < SEVERITY_NUMBER_FATAL`,
+      `set(severity_text, "FATAL") where severity_number >= SEVERITY_NUMBER_FATAL`,
     ]
   }
 
