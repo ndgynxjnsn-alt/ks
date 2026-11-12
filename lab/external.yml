@@ -1,11 +1,12 @@
 # LAB ONLY: stand-ins for company services, on the Ansible host (lab/external/docker-compose.yml):
 #   Keycloak - OAuth/OIDC for Grafana and Argo CD   Pebble - ACME server with External Account Binding (lab CA)
 #   BIND     - DNS zone of the domain, RFC2136 updates for the DNS-01 challenge
-#   Gitea    - Git (https): this repository for Argo CD, repository "grafana" for Grafana's Git Sync
+#   Gitea    - Git (https): this repository for Argo CD
+#   GitLab   - GitLab 17.2 (https): observability/grafana-dashboards for Grafana's Git Sync
 #   Nexus    - artifact repository: Docker registry + Helm repository
 # Renders their configs (with secrets) into lab/external/.generated/ and starts them with sudo docker compose.
 #   ansible-playbook -i lab/inventory lab/external.yml   (add -e lab_docker_sudo=true -K without docker group)
-- name: External services (Keycloak, Pebble, BIND, Gitea, Nexus)
+- name: External services (Keycloak, Pebble, BIND, Gitea, GitLab, Nexus)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -14,10 +15,11 @@
     gen: "{{ repo_dir }}/lab/external/.generated"
     lab_ca: "{{ gen }}/lab-ca.crt"
     gitea_api: "https://{{ git_host }}:3000/api"
+    gitlab_url: "https://{{ git_host }}:8443"
   tasks:
     - name: Directories for generated configs
       ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }
-      loop: [keycloak, pebble, bind, gitea]
+      loop: [keycloak, pebble, bind, gitea, gitlab]
 
     - name: Writable zone directory (named runs as user bind in the container)
       ansible.builtin.file: { path: "{{ gen }}/bind/zones", state: directory, mode: "0777" }
@@ -74,6 +76,24 @@
         chdir: "{{ gen }}"
         creates: "{{ gen }}/gitea/tls.crt"
       notify: Restart gitea
+
+    - name: TLS certificate for GitLab (lab CA)
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          openssl req -newkey rsa:2048 -nodes -subj "/CN={{ lab_host_ip }}" \
+            -keyout gitlab/tls.key -out gitlab/tls.csr 2>/dev/null
+          printf 'subjectAltName=IP:%s,DNS:localhost\nkeyUsage=critical,digitalSignature,keyEncipherment\n%s\n' \
+            "{{ lab_host_ip }}" 'extendedKeyUsage=serverAuth' > gitlab/tls.ext
+          openssl x509 -req -in gitlab/tls.csr -CA lab-ca.crt -CAkey lab-ca.key -CAcreateserial \
+            -days 3650 -extfile gitlab/tls.ext -out gitlab/tls.crt 2>/dev/null
+          chmod 0644 gitlab/tls.key gitlab/tls.crt
+          rm -f gitlab/tls.csr gitlab/tls.ext
+        chdir: "{{ gen }}"
+        creates: "{{ gen }}/gitlab/tls.crt"
+
+    - name: GitLab root password (used on its first start)
+      ansible.builtin.template: { src: templates/gitlab.env.j2, dest: "{{ gen }}/gitlab.env", mode: "0600" }
 
     - name: Pebble configuration (EAB key id + HMAC key from tls_issuer)
       ansible.builtin.template:
@@ -141,6 +161,7 @@
           - "(or use the lab DNS: dig @{{ lab_host_ip }} -p 10053 grafana.{{ domain }})"
           - "Keycloak admin console: http://{{ oauth.hostname }}:8080/admin  (admin / .secrets/keycloak_admin_password)"
           - "Nexus: http://{{ nexus_host }}:8091  (admin / .secrets/nexus_admin_password)"
+          - "GitLab: {{ gitlab_url }}  (root / .secrets/gitlab_root_password)"
           - "Lab users: {{ keycloak_users | map(attribute='name') | join(', ') }}"
           - "  passwords: .secrets/keycloak_user_<name>"
           - "Then: ansible-playbook -i lab/inventory ansible/publish.yml (images + charts -> Nexus), site.yml, lgtm.yml"

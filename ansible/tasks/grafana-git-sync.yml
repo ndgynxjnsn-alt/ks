@@ -1,7 +1,8 @@
 # Git Sync for one Grafana org: a Repository resource that syncs <dir>/ of grafana_git_sync.url into the folder
-# "LGTM" of the org and commits dashboards saved in the UI back (workflows). Created once; Grafana keeps the
-# token encrypted and doesn't show it again (to change url/token: delete the repository in Administration ->
-# Provisioning, re-run lgtm.yml). Vars: git_sync_org_id, git_sync_dir
+# "LGTM" of the org and commits dashboards saved in the UI back (workflows). Pure git over https (type git), so
+# any Git server works (GitLab, Gitea, ...). Created once; Grafana keeps the token encrypted and doesn't show it
+# again. A changed url or branch replaces the repository; for a new token only: delete the repository in
+# Administration -> Provisioning and re-run lgtm.yml. Vars: git_sync_org_id, git_sync_dir
 - name: "Git Sync repository of org {{ git_sync_dir }}"
   vars:
     git_sync_namespace: "{{ 'default' if git_sync_org_id | int == 1 else 'org-' ~ git_sync_org_id }}"
@@ -17,6 +18,36 @@
         force_basic_auth: true
         status_code: [200, 404]
       register: git_sync_repo
+
+    - name: "Git server or branch changed: replace the repository of org {{ git_sync_dir }}"
+      ansible.builtin.uri:
+        url: "{{ repositories_url }}/lgtm"
+        method: DELETE
+        headers: { Host: "grafana.{{ domain }}" }
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 202]
+      when: >-
+        git_sync_repo.status == 200 and
+        (git_sync_repo.json.spec.git.url | default('') != grafana_git_sync.url or
+         git_sync_repo.json.spec.git.branch | default('') != grafana_git_sync.branch)
+      register: git_sync_deleted
+      changed_when: true
+
+    - name: "Wait until Grafana removed the old repository of org {{ git_sync_dir }}"
+      ansible.builtin.uri:
+        url: "{{ repositories_url }}/lgtm"
+        headers: { Host: "grafana.{{ domain }}" }
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: git_sync_gone
+      until: git_sync_gone.status == 404
+      retries: 30
+      delay: 5
+      when: git_sync_deleted is not skipped
 
     - name: "Create the repository of org {{ git_sync_dir }}"
       ansible.builtin.uri:
@@ -44,6 +75,6 @@
           secure:
             token: { create: "{{ grafana_git_sync.token }}" }
         status_code: [200, 201]
-      when: git_sync_repo.status == 404
+      when: git_sync_repo.status == 404 or git_sync_deleted is not skipped
       changed_when: true
       no_log: true

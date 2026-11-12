@@ -11,8 +11,10 @@ Tempo, Mimir and Pyroscope, with Grafana Alloy as the single telemetry entry poi
 * **GitOps.** Ansible prepares the servers and bootstraps **Argo CD**. Argo CD deploys the rest from Git as an
   *app of apps*.
 * **Lab and real site are separated.** `lab/` simulates the servers with Vagrant/libvirt VMs and runs stand-ins for
-  company services: CA, DNS, IdP, Git, Nexus. The playbooks in `ansible/` are the same for the lab and a real site. Only the
+  company services: CA, DNS, IdP, Git (Gitea, GitLab), Nexus. The playbooks in `ansible/` are the same for the lab and a real site. Only the
   inventory differs.
+
+Diagrams of the servers and of the applications: [docs/architecture.md](docs/architecture.md).
 
 ```
              DNS: *.lgtm.company.org -> ingress VIP                     Kubernetes API -> control-plane VIP
@@ -87,9 +89,10 @@ inventories/example/              template for a real site (all site settings)
 lab/                              LAB ONLY
   Vagrantfile                     3 Ubuntu 26.04 VMs, 5 data disks each, isolated networks
   inventory/                      lab servers + lab site settings
-  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea, Nexus
+  external.yml, external/         stand-in company services (docker compose): Keycloak, Pebble, BIND, Gitea, GitLab, Nexus
   tasks/, templates/              their setup and configuration (Nexus API, Grafana repo, Keycloak realm, ...)
 examples/                         apps outside the cluster; alerting-matrix/ (untested sketch)
+docs/architecture.md              diagrams (Mermaid): servers and network, applications and storage
 docs/s3-storage.md                S3 storage research and decision (Garage)
 ```
 
@@ -109,7 +112,7 @@ docs/s3-storage.md                S3 storage research and decision (Garage)
 ansible-playbook ansible/download.yml                        # online: everything into artifacts/ (~3 GB)
 (cd lab && vagrant destroy -f)                               # optional: start from scratch
 (cd lab && vagrant up)                                       # 3 bare VMs on isolated networks
-ansible-playbook -i lab/inventory lab/external.yml           # Keycloak, Pebble (CA), BIND (DNS), Gitea (Git), Nexus
+ansible-playbook -i lab/inventory lab/external.yml           # Keycloak, Pebble, BIND, Gitea, GitLab, Nexus
 ansible-playbook -i lab/inventory ansible/publish.yml        # images + charts -> Nexus
 ansible-playbook -i lab/inventory ansible/disks.yml          # optional: the servers' disks, TopoLVM suggestion
 ansible-playbook -i lab/inventory ansible/site.yml           # offline: TopoLVM, Garage, RKE2 HA + kube-vip, ./kubeconfig
@@ -139,7 +142,8 @@ Hosts file on the lab host, or use the lab DNS (`dig @192.168.56.1 -p 10053 graf
 | https://alloy.lgtm.company.org | Alloy UI. Also accepts OTLP/HTTP (`/v1/*`) and Pyroscope pushes (`/ingest`) |
 | https://{loki,mimir,tempo,pyroscope,garage}.lgtm.company.org | backend APIs (multi-tenant: send `X-Scope-OrgID`) |
 | http://192.168.56.1:8091 | Nexus (lab): `admin` / `.secrets/nexus_admin_password`; Docker registry on `:8092` |
-| https://192.168.56.1:3000 | Gitea (lab): `lgtm` / `.secrets/gitea_password`; repositories `lgtm` and `grafana` |
+| https://192.168.56.1:3000 | Gitea (lab): `lgtm` / `.secrets/gitea_password`; repository `lgtm` (Argo CD) |
+| https://192.168.56.1:8443 | GitLab 17.2 (lab): `root` / `.secrets/gitlab_root_password`; project `observability/grafana-dashboards` |
 
 Everything is also served on plain http. Secrets are generated on first use, one file each in `.secrets/`
 (ignored by git).
@@ -444,9 +448,21 @@ truth. `lgtm.yml` creates the connection per org once (Administration → Provis
   `[provisioning] allowed_git_urls` to the host of `grafana_git_sync.url`.
 * Git Sync can't take over a dashboard whose UID already exists outside the repository: delete the old one first.
 
-Lab: repository `grafana` on Gitea (https, lab CA). `lab/external.yml` creates it with the dashboards of
-`grafana/dashboards` (`main/` gets all of them, each tenant its `tenants[].dashboards`), plus an access token
-for Grafana.
+Lab: project `observability/grafana-dashboards` on **GitLab 17.2** (https with the lab CA, no ssh).
+`lab/external.yml` creates it with the dashboards of `grafana/dashboards` (`main/` gets all of them, each
+tenant its `tenants[].dashboards`), plus a project access token for Grafana.
+
+GitLab (lab and company):
+
+* Grafana uses the repository type `git`: plain Git over https, no GitLab API. Any non-empty `token_user`
+  works with a GitLab token (`oauth2` here).
+* The token is a **project access token** with role Maintainer (to push to the protected default branch) and
+  the scopes `read_repository` and `write_repository`.
+* GitLab tokens **expire after at most a year**. To renew one: put the new token into the inventory (lab: delete
+  `.secrets/gitlab_grafana_token` and re-run `lab/external.yml`). Then delete the repository under
+  Administration → Provisioning in every org and re-run `lgtm.yml`, because Grafana doesn't show or update a
+  stored token.
+* A changed `url` or `branch` is picked up by `lgtm.yml`: it replaces the repository in every org.
 
 ## OAuth (Grafana, Argo CD ↔ IdP)
 

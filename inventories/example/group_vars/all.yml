@@ -42,9 +42,11 @@ gitops:
 # ---------------------------------------------------------------- Grafana Git Sync
 # Dashboards per Grafana org (directories main/, <tenant>/) in their own repository; Grafana commits UI saves.
 grafana_git_sync:
-  url: "https://{{ git_host }}/observability/grafana-dashboards.git"
+  url: "https://{{ git_host }}/observability/grafana-dashboards.git"   # e.g. GitLab: git over https, no ssh
   branch: main
-  token_user: grafana-git-sync                        # owner of the token (write access to the repository)
+  # GitLab: a project access token (role Maintainer, scopes read_repository + write_repository); it expires
+  # after at most a year. Any non-empty user name works with it.
+  token_user: oauth2
   token: "{{ vault_grafana_git_token }}"
   workflows: [write]
 

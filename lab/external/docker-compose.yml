@@ -5,7 +5,8 @@
 #   pebble    https://192.168.56.1:14000/dir     ACME server with External Account Binding (the "company CA")
 #   bind      192.168.56.1:10053 (udp+tcp)       authoritative DNS for lgtm.company.org: *.lgtm.company.org
 #                                                -> ingress VIP (Pebble resolves the hosts for HTTP-01 here)
-#   gitea     https://192.168.56.1:3000          Git repositories: this one (Argo CD) and Grafana's (Git Sync)
+#   gitea     https://192.168.56.1:3000          Git repository of this project (Argo CD)
+#   gitlab    https://192.168.56.1:8443          GitLab 17.2: Grafana's dashboards (Git Sync), observability/grafana-dashboards
 #   nexus     http://192.168.56.1:8091           Sonatype Nexus: Helm repository (UI/API), Docker registry on :8092
 name: lgtm-external
 
@@ -66,6 +67,33 @@ services:
       - ./.generated/gitea:/etc/gitea-tls:ro
     restart: unless-stopped
 
+  # The company's GitLab (17.2): Grafana's dashboard repository (Git Sync over https). Set up by lab/external.yml
+  # (lab/tasks/grafana-repo.yml). First start takes 3-5 minutes; it needs ~3 GB of memory.
+  gitlab:
+    image: gitlab/gitlab-ce:17.2.9-ce.0
+    hostname: gitlab
+    env_file: ./.generated/gitlab.env          # GITLAB_ROOT_PASSWORD (first start only)
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'https://192.168.56.1:8443'
+        letsencrypt['enable'] = false
+        nginx['ssl_certificate'] = '/etc/gitlab/tls/tls.crt'       # signed by the lab CA (lab/external.yml)
+        nginx['ssl_certificate_key'] = '/etc/gitlab/tls/tls.key'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222               # not published: https only
+        # small lab footprint
+        prometheus_monitoring['enable'] = false
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 5
+        gitlab_rails['usage_ping_enabled'] = false
+    ports: ["8443:8443"]
+    shm_size: 256m
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+      - ./.generated/gitlab:/etc/gitlab/tls:ro
+    restart: unless-stopped
+
   # The company's artifact repository: container images (Docker hosted repository "lgtm-docker", own HTTP
   # connector on 8082) and Helm charts (hosted repository "lgtm-helm"). Set up by lab/external.yml.
   # 8081 on the host is taken by the shop example (examples/), hence 8091/8092.
@@ -82,6 +110,9 @@ services:
     restart: unless-stopped
 
 volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
   nexus-data:
   gitea-data:
   gitea-config:

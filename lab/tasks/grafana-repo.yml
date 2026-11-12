@@ -1,62 +1,150 @@
-# The Git repository Grafana's Git Sync works on (grafana_git_sync in the inventory): repository "grafana" of
-# the Gitea user, an access token for Grafana, and - only when the repository is new - the first content:
+# The Git repository Grafana's Git Sync works on (grafana_git_sync in the inventory): project
+# observability/grafana-dashboards on the lab GitLab (17.2), a project access token for Grafana, and - only when
+# the project is new - the first content:
 #   main/<dashboard>.json      all of grafana/dashboards (Main org: every tenant)
 #   <tenant>/<dashboard>.json  the dashboards listed for the tenant (tenants[].dashboards)
 # From then on the repository is the source of truth; grafana/dashboards is not deployed again.
-- name: Grafana repository on Gitea
+- name: Grafana repository on GitLab
   vars:
-    gitea_auth: { user: "{{ gitops.publish.username }}", password: "{{ gitops.publish.password }}" }
-    token_file: "{{ secrets_dir }}/gitea_grafana_token"
+    gitlab_api: "{{ gitlab_url }}/api/v4"
+    project_path: "{{ grafana_git_sync.url | urlsplit('path') | regex_replace('^/|\\.git$', '') }}"
+    group_path: "{{ project_path.split('/')[0] }}"
+    admin_token: >-
+      {{ lookup('password', secrets_dir + '/gitlab_admin_token chars=ascii_letters,digits length=24') }}
+    grafana_token_file: "{{ secrets_dir }}/gitlab_grafana_token"
+    gitlab_headers: { PRIVATE-TOKEN: "{{ admin_token }}" }
   block:
-    - name: Repository "grafana"
+    - name: Wait for GitLab (first start takes 3-5 minutes)
+      ansible.builtin.uri: { url: "{{ gitlab_url }}/users/sign_in", ca_path: "{{ lab_ca }}" }
+      register: gitlab_up
+      until: gitlab_up.status == 200
+      retries: 60
+      delay: 10
+
+    - name: Admin token works
       ansible.builtin.uri:
-        url: "{{ gitea_api }}/v1/user/repos"
+        url: "{{ gitlab_api }}/user"
+        headers: "{{ gitlab_headers }}"
+        ca_path: "{{ lab_ca }}"
+        status_code: [200, 401]
+      register: gitlab_admin
+      no_log: true
+
+    # GitLab has no API to create the first token; the Rails console sets one with the value from .secrets/
+    - name: Admin token of root (lab automation, scope api, valid for a year)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - exec
+          - -T
+          - gitlab
+          - gitlab-rails
+          - runner
+          - >-
+            u = User.find_by_username('root');
+            u.personal_access_tokens.where(name: 'lgtm-lab').each(&:revoke!);
+            t = u.personal_access_tokens.new(name: 'lgtm-lab', scopes: [:api], expires_at: 364.days.from_now);
+            t.set_token('{{ admin_token }}'); t.save!
+        chdir: "{{ repo_dir }}/lab/external"
+      become: "{{ lab_docker_sudo | default(false) }}"
+      changed_when: true
+      when: gitlab_admin.status == 401
+      no_log: true
+
+    - name: Group of the project
+      ansible.builtin.uri:
+        url: "{{ gitlab_api }}/groups"
         method: POST
-        user: "{{ gitea_auth.user }}"
-        password: "{{ gitea_auth.password }}"
-        force_basic_auth: true
+        headers: "{{ gitlab_headers }}"
         ca_path: "{{ lab_ca }}"
         body_format: json
-        body: { name: grafana, private: true, default_branch: "{{ grafana_git_sync.branch }}" }
-        status_code: [201, 409]
+        body: { name: "{{ group_path }}", path: "{{ group_path }}", visibility: private }
+        status_code: [201, 400]
+      register: gitlab_group
+      changed_when: gitlab_group.status == 201
+      failed_when: gitlab_group.status == 400 and 'has already been taken' not in gitlab_group.content
+
+    - name: Look up the group
+      ansible.builtin.uri:
+        url: "{{ gitlab_api }}/groups/{{ group_path }}"
+        headers: "{{ gitlab_headers }}"
+        ca_path: "{{ lab_ca }}"
+      register: gitlab_group
+
+    - name: Project for Grafana's dashboards
+      ansible.builtin.uri:
+        url: "{{ gitlab_api }}/projects"
+        method: POST
+        headers: "{{ gitlab_headers }}"
+        ca_path: "{{ lab_ca }}"
+        body_format: json
+        body:
+          name: "{{ project_path.split('/')[-1] }}"
+          path: "{{ project_path.split('/')[-1] }}"
+          namespace_id: "{{ gitlab_group.json.id }}"
+          visibility: private
+          initialize_with_readme: false
+        status_code: [201, 400]
       register: grafana_repo
       changed_when: grafana_repo.status == 201
+      failed_when: grafana_repo.status == 400 and 'has already been taken' not in grafana_repo.content
+
+    - name: Look up the project
+      ansible.builtin.uri:
+        url: "{{ gitlab_api }}/projects/{{ project_path | urlencode | replace('/', '%2F') }}"
+        headers: "{{ gitlab_headers }}"
+        ca_path: "{{ lab_ca }}"
+      register: grafana_project
 
     - name: Access token for Grafana exists
-      ansible.builtin.stat: { path: "{{ token_file }}" }
+      ansible.builtin.stat: { path: "{{ grafana_token_file }}" }
       register: token_stat
 
-    - name: Access token for Grafana (Gitea shows a token only once, so it is replaced when the file is missing)
+    # GitLab shows a token only once, so it is replaced when the file is missing. Project access tokens expire
+    # after at most a year: delete the file and re-run (then re-create Grafana's repository, see README).
+    - name: Project access token for Grafana
       when: not token_stat.stat.exists
       block:
-        - name: Remove an old token of that name
+        - name: Existing project access tokens
           ansible.builtin.uri:
-            url: "{{ gitea_api }}/v1/users/{{ gitea_auth.user }}/tokens/grafana-git-sync"
-            method: DELETE
-            user: "{{ gitea_auth.user }}"
-            password: "{{ gitea_auth.password }}"
-            force_basic_auth: true
+            url: "{{ gitlab_api }}/projects/{{ grafana_project.json.id }}/access_tokens"
+            headers: "{{ gitlab_headers }}"
             ca_path: "{{ lab_ca }}"
-            status_code: [204, 404]
+          register: project_tokens
 
-        - name: Create the token
+        - name: Revoke old tokens of that name
           ansible.builtin.uri:
-            url: "{{ gitea_api }}/v1/users/{{ gitea_auth.user }}/tokens"
+            url: "{{ gitlab_api }}/projects/{{ grafana_project.json.id }}/access_tokens/{{ item.id }}"
+            method: DELETE
+            headers: "{{ gitlab_headers }}"
+            ca_path: "{{ lab_ca }}"
+            status_code: 204
+          loop: >-
+            {{ project_tokens.json | selectattr('name', 'equalto', 'grafana-git-sync') | selectattr('active') | list }}
+          loop_control: { label: "{{ item.id }}" }
+          changed_when: true
+
+        - name: Create the token (role Maintainer, to push to the protected default branch)
+          ansible.builtin.uri:
+            url: "{{ gitlab_api }}/projects/{{ grafana_project.json.id }}/access_tokens"
             method: POST
-            user: "{{ gitea_auth.user }}"
-            password: "{{ gitea_auth.password }}"
-            force_basic_auth: true
+            headers: "{{ gitlab_headers }}"
             ca_path: "{{ lab_ca }}"
             body_format: json
-            body: { name: grafana-git-sync, scopes: [write:repository] }
+            body:
+              name: grafana-git-sync
+              scopes: [read_repository, write_repository]
+              access_level: 40
+              expires_at: "{{ '%Y-%m-%d' | strftime(now().timestamp() + 364 * 86400) }}"
             status_code: 201
           register: grafana_token
           no_log: true
 
         - name: Store the token in .secrets/
           ansible.builtin.copy:
-            content: "{{ grafana_token.json.sha1 }}"
-            dest: "{{ token_file }}"
+            content: "{{ grafana_token.json.token }}"
+            dest: "{{ grafana_token_file }}"
             mode: "0600"
           no_log: true
 
@@ -77,7 +165,7 @@
           git add -A
           git -c user.name=lgtm -c user.email=lgtm@example.corp commit -q -m "Dashboards from the LGTM repository"
           git -c http.sslCAInfo={{ lab_ca }} \
-            -c "http.extraHeader=Authorization: Basic {{ (gitea_auth.user ~ ':' ~ gitea_auth.password) | b64encode }}" \
+            -c "http.extraHeader=Authorization: Basic {{ ('root:' ~ admin_token) | b64encode }}" \
             push -q {{ grafana_git_sync.url }} HEAD:{{ grafana_git_sync.branch }}
           cd .. && rm -rf grafana-seed
         chdir: "{{ artifacts_dir }}/work"

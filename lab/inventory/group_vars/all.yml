@@ -23,7 +23,7 @@ grafana_db_external: true
 # git.company.org). Lab: stand-ins on the Ansible host (lab/external), reached by its IP on the lab network
 # because the lab has no DNS for these names.
 nexus_host: "{{ lab_host_ip }}"     # artifact repository: UI/API + Helm repository :8091, Docker registry :8092
-git_host: "{{ lab_host_ip }}"       # Git server (Gitea, https :3000): this repository and Grafana's
+git_host: "{{ lab_host_ip }}"       # Git: Gitea https :3000 (this repository), GitLab https :8443 (Grafana's)
 
 # ---------------------------------------------------------------- artifact repository (Nexus)
 # Container images and Helm charts come from the company's Nexus (lab: lab/external): ansible/publish.yml pushes
@@ -53,20 +53,20 @@ gitops:
     password: "{{ lookup('password', secrets_dir + '/gitea_password chars=ascii_letters,digits length=20') }}"
 
 # CA certificates the cluster trusts in addition to certs/ and the public CAs (paths on the Ansible host), e.g.
-# a CA generated per site. Lab: the lab CA that signed Gitea's certificate (Argo CD and Grafana read Git).
+# a CA generated per site. Lab: the lab CA that signed Gitea's and GitLab's certificates (Argo CD, Grafana).
 trusted_ca_files: ["{{ repo_dir }}/lab/external/.generated/lab-ca.crt"]
 
 # ---------------------------------------------------------------- Grafana Git Sync
 # Dashboards and folders of every Grafana org live in a second Git repository, one directory per org
 # (main/, <tenant>/). Grafana syncs it (Git Sync, pure Git over https) and commits what is saved in the UI;
-# Argo CD and Ansible don't deploy dashboards. Lab: repository "grafana" on Gitea, seeded once from
-# grafana/dashboards by lab/external.yml.
+# Argo CD and Ansible don't deploy dashboards. Lab: project observability/grafana-dashboards on GitLab 17.2,
+# seeded once from grafana/dashboards by lab/external.yml.
 grafana_git_sync:
-  url: "https://{{ git_host }}:3000/lgtm/grafana.git"
+  url: "https://{{ git_host }}:8443/observability/grafana-dashboards.git"   # GitLab 17.2, git over https
   branch: main
-  token_user: lgtm
-  token: "{{ lookup('file', secrets_dir + '/gitea_grafana_token') }}"   # written by lab/external.yml
-  workflows: [write]       # UI saves commit to the branch; [branch]: via pull requests; []: read-only
+  token_user: oauth2       # GitLab accepts any non-empty user name with an access token
+  token: "{{ lookup('file', secrets_dir + '/gitlab_grafana_token') }}"   # project access token, lab/external.yml
+  workflows: [write]       # UI saves commit to the branch; [branch]: via merge requests; []: read-only
 
 # ---------------------------------------------------------------- tenants
 # Loki, Mimir, Tempo and Pyroscope run multi-tenant: every write and query carries X-Scope-OrgID.
