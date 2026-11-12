@@ -8,7 +8,8 @@
 #   pricing       c: -> catalog                       shop -> pricing -> catalog
 #   catalog       d: -> PostgreSQL (every ~5th query is slow)
 #   notification  e
-#   postgres      slow query log (JSON) + pg_stat_statements; Alloy sidecar -> metrics + logs
+#   postgres      TimescaleDB + PostGIS + H3 (postgres/Dockerfile); slow query log (JSON) + pg_stat_statements;
+#                 Alloy sidecar -> metrics + logs
 #   loadgen       an order every few seconds (backend traces only; the browser traces come from you)
 # The backends run with the OTel Java agent (traces, metrics, logs) and the Pyroscope agent + OTel extension
 # (profiles linked to spans). Settings: .env (cluster address, tenant).
@@ -104,17 +105,24 @@ services:
     depends_on: [shop]
 
   postgres:
-    image: postgres:18.6
+    image: lgtm-examples/postgres:18-ts2.24.0
+    build: ./postgres                      # timescale/timescaledb:2.24.0-pg18 + PostGIS 3.6.2 + h3-pg 4.2.3
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: postgres
+      # The base image's init scripts write timescaledb-tune's settings and the telemetry level into
+      # $PGDATA/postgresql.conf, which this server doesn't read (config_file below): all of it lives there.
+      NO_TS_TUNE: "true"
+      TIMESCALEDB_TELEMETRY: "off"
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     configs:
       - { source: pg_conf, target: /etc/postgresql/postgresql.conf }
       - { source: pg_init, target: /docker-entrypoint-initdb.d/01-init.sql }
     volumes:
-      - pgdata:/var/lib/postgresql
-      - pglogs:/var/log/postgresql
+      # PGDATA=/var/lib/postgresql/18/docker. Separate volumes from the former postgres:18.6 (Debian, uid 999):
+      # this image runs as postgres uid 70 and creates the log directory with that owner (Dockerfile).
+      - tsdata:/var/lib/postgresql
+      - tslogs:/var/log/postgresql
     extra_hosts: *lgtm-hosts               # for the sidecar, which shares this network namespace
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
@@ -140,7 +148,7 @@ services:
     configs:
       - { source: pg_alloy, target: /etc/alloy/config.alloy }
     volumes:
-      - pglogs:/var/log/postgresql:ro
+      - tslogs:/var/log/postgresql:ro
       - alloydata:/var/lib/alloy/data
     depends_on:
       postgres: { condition: service_healthy }
@@ -159,8 +167,8 @@ services:
     depends_on: [frontend]
 
 volumes:
-  pgdata:
-  pglogs:
+  tsdata:
+  tslogs:
   alloydata:
 
 configs:

@@ -7,7 +7,7 @@ runs outside it, the way your own services would. Copy what you need.
 |---|---|
 | `frontend/` | React app with **Grafana Faro**: browser logs, errors, Web Vitals and traces; slow requests reported |
 | `backend/` | Spring Boot, five roles in one codebase, run with the **OTel Java agent** and the **Pyroscope agent + OTel extension** |
-| `postgres/` | PostgreSQL with a **slow query log**, scraped by an **Alloy sidecar** (metrics + logs) |
+| `postgres/` | PostgreSQL 18 with **TimescaleDB, PostGIS and H3** (own image), a **slow query log**, scraped by an **Alloy sidecar** (metrics + logs) |
 | `docker-compose.yml` | All of the above on one Docker host, with agents |
 | `swarm/` | The same apps on a 3-node **Docker Swarm** *without* agents: **Beyla** (eBPF), container logs, eBPF profiles, one Prometheus scraper |
 
@@ -71,6 +71,36 @@ The order id is validated (`[A-Za-z0-9-]`) before it goes into headers, logs and
 Why not an SQL comment like the trace context? sqlcommenter leaves statements that already contain a comment
 alone, so a comment of our own would suppress the `traceparent`.
 Don't put personal data into baggage, SQL comments or application_name.
+
+## PostgreSQL image: TimescaleDB, PostGIS, H3
+
+`postgres/Dockerfile` builds `lgtm-examples/postgres:18-ts2.24.0`:
+
+* **Base:** `timescale/timescaledb:2.24.0-pg18`. That's Alpine with PostgreSQL 18 in `/usr/local`, running as
+  `postgres` (uid 70) with `PGDATA=/var/lib/postgresql/18/docker`.
+* **Builder stage:** downloads and compiles **PostGIS 3.6.2** (with raster, topology and SFCGAL) and
+  **h3-pg 4.2.3**. Both downloads are checked against a SHA256. These are the same versions as
+  `lnf9s35w2/my-offline-timescale:pg18`.
+* **Final stage:** the base image plus PostGIS's runtime libraries and the compiled extension files.
+  `postgres/extensions-init.sql` runs on the first start and enables `timescaledb`, `postgis`,
+  `postgis_raster`, `h3` and `h3_postgis` in `postgres` and `template1`. Every database created later (here:
+  `shop`) has them too.
+
+What differs from the plain `postgres` image:
+
+* **`timescaledb` must be in `shared_preload_libraries`.** The base image's init scripts put it, the
+  telemetry level and `timescaledb-tune`'s settings into `$PGDATA/postgresql.conf`. This server reads
+  `postgres/postgresql.conf` instead (`config_file`), so everything is set there. The compose file turns the
+  tuning off (`NO_TS_TUNE`) and the telemetry too.
+* **Log directory:** the image creates `/var/log/postgresql` owned by `postgres` (mode 0755). A new named
+  volume takes over that owner. `log_file_mode = 0644` lets the Alloy sidecar read the files through the
+  same volume.
+* **Different uid:** the image runs as uid 70, while the Debian-based `postgres` image used uid 999. The
+  volumes are therefore new (`tsdata`, `tslogs`). The old ones can go:
+  `docker volume rm lgtm-examples_pgdata lgtm-examples_pglogs`.
+
+The Swarm stack (`swarm/`) keeps plain `postgres:18.6`. `postgres/init.sql` doesn't depend on the new
+extensions, so it works for both.
 
 ## Frontend: what Faro sends, and slow requests
 
