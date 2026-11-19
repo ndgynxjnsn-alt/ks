@@ -1,7 +1,8 @@
 # Keycloak imports the realm file only when the realm doesn't exist yet. This keeps an existing realm in step
 # with lab/templates/keycloak-realm.json.j2 through the admin API: clients are overwritten (new clients,
-# changed redirect URIs/secrets), missing groups and users are added (existing ones are kept, so their ids and
-# the logins linked to them stay), and every user is put into the groups the inventory lists for it.
+# changed redirect URIs/secrets/mappers), missing realm roles and users are added (existing users are kept, so
+# their ids and the logins linked to them stay), every user gets exactly the realm roles the inventory lists
+# for it, and groups (no longer used for access) are removed.
 - name: Keycloak admin API
   vars:
     kc: http://127.0.0.1:8080
@@ -27,19 +28,18 @@
       register: kc_token
       no_log: true
 
-    # (partialImport can't skip existing groups - "Duplicate resource error" - so groups are created one by one)
-    - name: Groups (only missing ones)
+    - name: Realm roles (only missing ones)
       ansible.builtin.uri:
-        url: "{{ kc }}/admin/realms/{{ realm.realm }}/groups"
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/roles"
         method: POST
         headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
         body_format: json
         body: "{{ item }}"
         status_code: [201, 409]
-      loop: "{{ realm.groups }}"
+      loop: "{{ realm.roles.realm }}"
       loop_control: { label: "{{ item.name }}" }
-      register: kc_group_add
-      changed_when: kc_group_add.status == 201
+      register: kc_role_add
+      changed_when: kc_role_add.status == 201
 
     - name: Clients (overwritten), users (only missing ones; memberships below)
       ansible.builtin.uri:
@@ -51,7 +51,7 @@
       loop:
         - { policy: OVERWRITE, resources: { clients: "{{ realm.clients }}" } }
         - policy: SKIP
-          resources: { users: "{{ realm.users | map('ansible.utils.remove_keys', target=['groups']) }}" }
+          resources: { users: "{{ realm.users | map('ansible.utils.remove_keys', target=['realmRoles']) }}" }
       loop_control: { label: "{{ item.resources.keys() | join(', ') }}" }
       register: kc_import
       changed_when: kc_import.json.added | int > 0
@@ -63,21 +63,60 @@
         headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
       register: kc_groups
 
+    - name: Remove groups (access is by realm roles)
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/groups/{{ item.id }}"
+        method: DELETE
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+        status_code: 204
+      loop: "{{ kc_groups.json }}"
+      loop_control: { label: "{{ item.name }}" }
+      changed_when: true
+
+    - name: Realm roles of the realm
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/roles"
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+      register: kc_roles
+
     - name: Users of the realm
       ansible.builtin.uri:
         url: "{{ kc }}/admin/realms/{{ realm.realm }}/users?max=1000"
         headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
       register: kc_users
 
-    - name: Group memberships from the inventory
+    - name: Current realm roles of each user
       ansible.builtin.uri:
-        url: "{{ kc }}/admin/realms/{{ realm.realm }}/users/{{ user_id }}/groups/{{ group_id }}"
-        method: PUT
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/users/{{ user_id }}/role-mappings/realm"
         headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+      vars:
+        user_id: "{{ (kc_users.json | selectattr('username', 'equalto', item.name) | first).id }}"
+      loop: "{{ keycloak_users }}"
+      loop_control: { label: "{{ item.name }}" }
+      register: kc_user_roles
+
+    # Only the managed roles (realm.roles) are touched; Keycloak's own (default-roles-*, ...) stay.
+    - name: Realm roles from the inventory (add missing, remove the others)
+      ansible.builtin.uri:
+        url: "{{ kc }}/admin/realms/{{ realm.realm }}/users/{{ user_id }}/role-mappings/realm"
+        method: "{{ item.method }}"
+        headers: { Authorization: "Bearer {{ kc_token.json.access_token }}" }
+        body_format: json
+        body: "{{ kc_roles.json | selectattr('name', 'in', item.roles) | list }}"
         status_code: 204
       vars:
-        user_id: "{{ (kc_users.json | selectattr('username', 'equalto', item.0.name) | first).id }}"
-        group_id: "{{ (kc_groups.json | selectattr('name', 'equalto', item.1) | first).id }}"
-      loop: "{{ keycloak_users | subelements('groups') }}"
-      loop_control: { label: "{{ item.0.name }} -> {{ item.1 }}" }
-      changed_when: false    # PUT is idempotent; Keycloak doesn't tell whether it was a member already
+        user_id: "{{ (kc_users.json | selectattr('username', 'equalto', item.user) | first).id }}"
+      loop: >-
+        {%- set out = [] -%}
+        {%- set managed = realm.roles.realm | map(attribute='name') | list -%}
+        {%- for r in kc_user_roles.results -%}
+        {%-   set has = r.json | map(attribute='name') | select('in', managed) | list -%}
+        {%-   set add = r.item.roles | reject('in', has) | list -%}
+        {%-   set remove = has | reject('in', r.item.roles) | list -%}
+        {%-   if add -%}{%- set _ = out.append({'user': r.item.name, 'method': 'POST', 'roles': add}) -%}{%- endif -%}
+        {%-   if remove -%}
+        {%-     set _ = out.append({'user': r.item.name, 'method': 'DELETE', 'roles': remove}) -%}
+        {%-   endif -%}
+        {%- endfor -%}{{ out }}
+      loop_control: { label: "{{ item.user }}: {{ item.method }} {{ item.roles | join(', ') }}" }
+      changed_when: true

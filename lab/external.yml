@@ -16,6 +16,11 @@
     lab_ca: "{{ gen }}/lab-ca.crt"
     gitea_api: "https://{{ git_host }}:3000/api"
     gitlab_url: "https://{{ git_host }}:8443"
+    # realm roles of the lab Keycloak: the ones the inventory's oauth.roles names, one per tenant
+    keycloak_realm_roles: >-
+      {{ ([oauth.roles.grafana_admin] + oauth.roles.argocd_admin + oauth.roles.argocd_readonly | default([])
+          + tenants | map(attribute='name') | map('regex_replace', '^', oauth.roles.tenant_prefix) | list)
+         | unique }}
   tasks:
     - name: Directories for generated configs
       ansible.builtin.file: { path: "{{ gen }}/{{ item }}", state: directory, mode: "0750" }

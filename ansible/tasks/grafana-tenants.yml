@@ -1,7 +1,7 @@
-# One Grafana organization per tenant: created via the HTTP API (provisioning can't create orgs), with the
-# datasources of ansible/templates/grafana-datasources.yaml.j2 pinned to the tenant, and Git Sync of the
-# tenant's directory in Grafana's Git repository (dashboards).
-# Idempotent: existing orgs/datasources are updated in place. Var: tenant ({name})
+# One Grafana organization per tenant: created via the HTTP API (provisioning can't create orgs), and Git Sync
+# of the tenant's directory in Grafana's Git repository (dashboards). Its datasources are provisioned by Grafana
+# (argocd/root/templates/_datasources.tpl) once ansible/lgtm.yml passed the org id to the root app.
+# Idempotent. Var: tenant ({name})
 - name: "Grafana org {{ tenant.name }}"
   vars:
     grafana_api: "http://{{ ingress_vip }}/api"
@@ -43,36 +43,6 @@
     - name: Remember the org id
       ansible.builtin.set_fact:
         tenant_org_id: "{{ org_created.json.orgId if org_lookup.status == 404 else org_lookup.json.id }}"
-
-    - name: "Datasources of org {{ tenant.name }}"
-      ansible.builtin.uri:
-        url: "{{ grafana_api }}/datasources/uid/{{ ds.uid }}"
-        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
-        user: admin
-        password: "{{ grafana_admin_password }}"
-        force_basic_auth: true
-        status_code: [200, 404]
-      loop: "{{ tenant_datasources }}"
-      loop_control: { loop_var: ds, label: "{{ ds.uid }}" }
-      register: ds_lookup
-      vars:
-        tenant_datasources: >-
-          {{ lookup('template', 'templates/grafana-datasources.yaml.j2',
-             template_vars={'ds_tenants': [tenant.name], 'ds_dollar': '$'}) | from_yaml }}
-
-    - name: "Create or update datasources of org {{ tenant.name }}"
-      ansible.builtin.uri:
-        url: "{{ grafana_api }}/datasources{{ ('/uid/' ~ item.ds.uid) if item.status == 200 else '' }}"
-        method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
-        headers: "{{ grafana_headers | combine({'X-Grafana-Org-Id': tenant_org_id | string}) }}"
-        user: admin
-        password: "{{ grafana_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body: "{{ item.ds }}"
-      loop: "{{ ds_lookup.results }}"
-      loop_control: { label: "{{ item.ds.uid }}" }
-      changed_when: item.status == 404
 
     - name: "Git Sync: dashboards of org {{ tenant.name }}"
       ansible.builtin.include_tasks: grafana-git-sync.yml

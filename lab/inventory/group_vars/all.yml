@@ -111,10 +111,11 @@ tls_issuer:
   http01_check_nameservers: "{{ lab_host_ip }}:10053"
 
 # ---------------------------------------------------------------- OAuth (Grafana, Argo CD <-> Keycloak)
-# Users and groups live in the Keycloak realm (lab/templates/keycloak-realm.json.j2). One OAuth client each.
-# Group -> Grafana org/role:  grafana-admins -> Grafana server admin + Admin in all orgs,
-#                             tenant-<name>  -> Editor in the org of that tenant
-# Group -> Argo CD role:      argocd-admins  -> role:admin  (everyone else: no access)
+# Users and their roles live in the Keycloak realm (lab/templates/keycloak-realm.json.j2). One OAuth client each.
+# Access follows the user's roles (realm roles, token claim oauth.roles_claim), not groups:
+#   monitoring-grafana-admin       -> Grafana server admin + Admin in every org
+#   monitoring-tenant-<tenant>     -> Editor in the Grafana org of that tenant
+#   monitoring-argocd-admin        -> Argo CD role:admin (everyone else: no access)
 # Both still have their local admin as a fallback (Grafana: /login?disableAutoLogin=true).
 oauth:
   enabled: true
@@ -123,8 +124,14 @@ oauth:
   issuer: http://keycloak.company.org:8080/realms/lgtm
   client_id: grafana
   argocd_client_id: argocd
-  argocd_admin_groups: [argocd-admins]
-  # argocd_readonly_groups: [...]
+  # Top-level claim with the user's roles, in the ID token and from userinfo (Argo CD can't read nested claims
+  # such as Keycloak's default realm_access.roles; the lab realm adds a "roles" mapper to both clients).
+  roles_claim: roles
+  roles:
+    grafana_admin: monitoring-grafana-admin
+    tenant_prefix: monitoring-tenant-      # + <tenant name>
+    argocd_admin: [monitoring-argocd-admin]
+    argocd_readonly: []
 oauth_client_secret: >-
   {{ lookup('password', secrets_dir + '/oauth_client_secret chars=ascii_letters,digits length=40') }}
 argocd_oauth_client_secret: >-
@@ -133,6 +140,6 @@ keycloak_admin_password: >-
   {{ lookup('password', secrets_dir + '/keycloak_admin_password chars=ascii_letters,digits length=20') }}
 # lab users of the realm (password files in .secrets/keycloak_user_<name>)
 keycloak_users:
-  - { name: admin-user, email: admin@example.corp, groups: [grafana-admins, argocd-admins] }
-  - { name: alice, email: alice@example.corp, groups: [tenant-demo] }
-  - { name: bob, email: bob@example.corp, groups: [tenant-platform] }
+  - { name: admin-user, email: admin@example.corp, roles: [monitoring-grafana-admin, monitoring-argocd-admin] }
+  - { name: alice, email: alice@example.corp, roles: [monitoring-tenant-demo] }
+  - { name: bob, email: bob@example.corp, roles: [monitoring-tenant-platform] }

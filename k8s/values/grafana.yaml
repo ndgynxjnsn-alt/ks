@@ -7,7 +7,7 @@ fullnameOverride: grafana
 image:
   registry: lgtm.local
   repository: grafana
-  # tag: from grafana_image (ansible/group_vars/all.yml), set by the site overlay
+  # tag: from grafana_image (settings.yaml), set by the root app
   pullPolicy: IfNotPresent
 replicas: 2
 headlessService: true    # peer discovery for unified alerting HA (ha_peers below)
@@ -70,5 +70,5 @@ extraConfigmapMounts:
 env:
   SSL_CERT_FILE: /etc/ssl/company/ca-certificates.crt
 
-# Datasources are rendered by ansible/lgtm.yml from ansible/templates/grafana-datasources.yaml.j2:
-# the Main org gets them via provisioning (all tenants), every tenant org via the Grafana API.
+# Datasources, OAuth, image tag, domain: computed by the root app from the site's settings
+# (argocd/root/templates/_values.tpl, _datasources.tpl) - the Main org sees all tenants, each tenant org its own.

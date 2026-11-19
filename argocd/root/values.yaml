@@ -1,13 +1,80 @@
-# Set by ansible/lgtm.yml (root Application, helm.valuesObject) from the inventory; defaults for reference.
-repo:
-  git: ""            # this repository, as Argo CD reaches it
-  revision: main
-  helm: ""           # Helm repository with all charts of artifacts/charts
+# Values of the root app (app of apps). Three layers, later ones win:
+#   1. this file                 the apps and what is the same on every site
+#   2. settings.yaml (repo root) chart versions, images, constants - shared with Ansible
+#                                (the root Application reads it as $repo/settings.yaml)
+#   3. site                      the site's settings from the inventory, set by ansible/lgtm.yml in the root
+#                                Application (helm.valuesObject): plain data, no logic
+# Everything derived from them (Grafana, Argo CD, platform and certs values, datasources) is computed by the
+# templates here, so a change in Git is rolled out by Argo CD without running Ansible.
+
+# site: see ansible/templates/site-values.yaml.j2 for the keys
+site: {}
+
 # apps.<name>:
-#   chart/version  upstream chart from repo.helm, values from $values/k8s/values/<valuesFile|name>.yaml
-#   path           or: a directory/chart in this repository
-#   extraPath      additional directory (manifests/Kustomize) deployed with an upstream chart
-#   namespace      target namespace (default lgtm)
-#   wave           sync wave of the Application (CRD providers first)
-#   values         extra values (site-specific overlay), passed as helm.valuesObject
-apps: {}
+#   chart        upstream chart from site.repo.helm (default: <name>); version from settings.yaml charts.<chart>
+#   path         or: a directory/chart in this repository
+#   extraPath    additional directory (manifests/Kustomize) deployed with an upstream chart
+#   namespace    target namespace (default lgtm)
+#   wave         sync wave of the Application (CRD providers first)
+#   wait         false: ansible/lgtm.yml only reports the app instead of waiting for it
+#   siteValues   name of a template in _values.tpl that computes extra values from site/settings
+# Upstream charts get their values from k8s/values/<name>.yaml.
+# Sync waves: Argo CD itself, CRD providers (-3) -> platform resources, trust-manager (-2) -> trusted CAs (-1)
+#             -> backends (0) -> Alloy, Grafana (1) -> demo (2)
+apps:
+  argocd:                         # Argo CD manages itself (ansible/lgtm.yml only installs it the first time)
+    chart: argo-cd
+    namespace: argocd
+    wave: -3
+    siteValues: argocd
+  cert-manager:
+    namespace: cert-manager
+    wave: -3
+    siteValues: cert-manager
+  cloudnative-pg:
+    namespace: cnpg-system
+    wave: -3
+  plugin-barman-cloud:            # backups of Grafana's PostgreSQL to S3 (CloudNativePG plugin)
+    namespace: cnpg-system
+    wave: -3
+  trust-manager:                  # distributes certs/ (+ public CAs) as ConfigMap company-ca-bundle
+    namespace: cert-manager
+    wave: -2
+  certs:                          # the certs/ folder: trusted CA certificates -> Bundle company-ca-bundle
+    path: certs
+    namespace: cert-manager
+    wave: -1
+    siteValues: certs
+  topolvm:                        # local PersistentVolumes (LVM on every node), default StorageClass
+    namespace: topolvm-system
+    wave: -2
+  platform:
+    path: argocd/platform
+    wave: -2
+    siteValues: platform
+  kube-state-metrics:
+    namespace: kube-system
+    wave: 0
+  loki:
+    wave: 0
+  mimir:
+    chart: mimir-distributed      # version: settings.yaml mimir_chart (packaged from a fork by download.yml)
+    wave: 0
+  tempo:
+    wave: 0
+  pyroscope:
+    wave: 0
+  alloy:
+    wave: 1
+    extraPath: k8s/alloy          # Alloy config + import script as files (Kustomize ConfigMap)
+  grafana:
+    wave: 1
+    siteValues: grafana
+  headlamp:                       # Kubernetes web UI (https://headlamp.<domain>)
+    namespace: headlamp
+    wave: 1
+  demo:
+    path: k8s/demo
+    namespace: demo
+    wave: 2
+    wait: false                   # its image comes from demo.yml (run after lgtm.yml): lgtm.yml doesn't wait for it

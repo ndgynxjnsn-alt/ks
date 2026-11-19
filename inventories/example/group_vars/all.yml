@@ -72,6 +72,13 @@ oauth:
   issuer: https://sso.company.org/realms/company
   client_id: grafana-lgtm                 # OAuth client of Grafana
   argocd_client_id: argocd-lgtm           # a second client for Argo CD (redirect https://argocd.<domain>/auth/callback)
-  argocd_admin_groups: [lgtm-admins]      # IdP groups (claim "groups") -> Argo CD role:admin
+  # Access by the user's roles: a top-level claim in the ID token and userinfo (Keycloak: a "User Realm Role"
+  # mapper with this claim name on both clients; Argo CD can't read the nested realm_access.roles).
+  roles_claim: roles
+  roles:
+    grafana_admin: monitoring-grafana-admin     # Grafana server admin + Admin in every org
+    tenant_prefix: monitoring-tenant-           # monitoring-tenant-<tenant> -> Editor in that tenant's org
+    argocd_admin: [monitoring-argocd-admin]     # Argo CD role:admin
+    argocd_readonly: []                         # Argo CD role:readonly
 oauth_client_secret: "{{ vault_oauth_client_secret }}"
 argocd_oauth_client_secret: "{{ vault_argocd_oauth_client_secret }}"

@@ -1,0 +1,59 @@
+{#- The site's settings from the inventory, as plain data for the root app (argocd/root, values "site").
+    No logic here: the root chart's templates (argocd/root/templates/_values.tpl) derive everything from it.
+    grafana_org_ids: {tenant: org id} of the tenant orgs that exist already (ansible/lgtm.yml looks them up). -#}
+repo:
+  git: {{ gitops.repo_url | to_json }}
+  revision: {{ gitops.revision | to_json }}
+  helm: {{ gitops.helm_repo_url | to_json }}
+domain: {{ domain | to_json }}
+ingressVIP: {{ ingress_vip | to_json }}
+hosts: {{ lgtm_hosts | to_json }}
+tls:
+  issuer: {{ tls_issuer.name | to_json }}
+  acmeServer: {{ tls_issuer.acme_server | to_json }}
+  email: {{ tls_issuer.email | to_json }}
+  eabKeyID: {{ tls_issuer.eab_kid | to_json }}
+{% if tls_issuer.ca_bundle_file | default('') and tls_issuer.ca_bundle_file is file %}
+  caBundle: {{ lookup('file', tls_issuer.ca_bundle_file) | b64encode | to_json }}
+{% endif %}
+{% if tls_issuer.http01_check_nameservers is defined %}
+  http01CheckNameservers: {{ tls_issuer.http01_check_nameservers | to_json }}
+{% endif %}
+{% if trusted_ca_files | default([]) %}
+{%   set site_cas = [] %}
+{%   for f in trusted_ca_files %}{% set _ = site_cas.append(lookup('file', f) | trim) %}{% endfor %}
+trustedCAs: {{ site_cas | join('\n') | to_json }}
+{% endif %}
+grafanaDB:
+  external: {{ grafana_db_external | default(false) | to_json }}
+  backupRetention: {{ grafana_db_backup_retention | default('7d') | to_json }}
+{% if grafana_git_sync is defined %}
+gitSyncHost: {{ grafana_git_sync.url | urlsplit('netloc') | to_json }}
+{% endif %}
+tenants:
+{% for t in tenants %}
+  - name: {{ t.name | to_json }}
+{%   if grafana_org_ids[t.name] is defined %}
+    orgId: {{ grafana_org_ids[t.name] }}
+{%   endif %}
+{% endfor %}
+oauth:
+  enabled: {{ oauth.enabled | to_json }}
+{% if oauth.enabled %}
+  name: {{ oauth.name | default('Keycloak') | to_json }}
+  issuer: {{ oauth.issuer | to_json }}
+  hostname: {{ oauth.hostname | to_json }}
+{%   if oauth.host_ip is defined %}
+  hostIP: {{ oauth.host_ip | to_json }}
+{%   endif %}
+  clientID: {{ oauth.client_id | to_json }}
+{%   if oauth.argocd_client_id is defined %}
+  argocdClientID: {{ oauth.argocd_client_id | to_json }}
+{%   endif %}
+  rolesClaim: {{ oauth.roles_claim | default('roles') | to_json }}
+  roles:
+    grafanaAdmin: {{ oauth.roles.grafana_admin | to_json }}
+    tenantPrefix: {{ oauth.roles.tenant_prefix | to_json }}
+    argocdAdmin: {{ oauth.roles.argocd_admin | default([]) | to_json }}
+    argocdReadonly: {{ oauth.roles.argocd_readonly | default([]) | to_json }}
+{% endif %}

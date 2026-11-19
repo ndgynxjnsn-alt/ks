@@ -71,18 +71,19 @@ ansible/                          the playbooks - identical for the lab and a re
   download.yml                    the only online step: RKE2 tarballs, charts, images, plugins -> artifacts/
   publish.yml                     artifacts/images + charts -> artifact repository (Nexus)
   disks.yml                       lists/benchmarks the servers' disks, suggests topolvm_disk (read-only)
-  group_vars/all.yml              site-independent settings: versions, charts, generated secrets
+  group_vars/all.yml              site-independent settings for Ansible: node versions, generated secrets
   roles/garage, rke2, topolvm, otel_import
   tasks/                          apply-set (apply + prune), gitops-publish, grafana-*, pgbackweb
-  templates/                      secrets, root Application, Grafana datasources
+  templates/                      secrets, root Application + the site's settings for it (plain data)
+settings.yaml                     shared by Ansible and Argo CD: chart versions, images, constants
 argocd/
-  root/                           app of apps: one Argo CD Application per component
+  root/                           app of apps: one Argo CD Application per component (Argo CD included); its
+                                  templates compute every site-specific value (Grafana, Argo CD, datasources)
   platform/                       ingress VIP, ingresses, TLS, Grafana database + backups, PG Back Web
 grafana/dashboards/               first content of Grafana's Git repository (not deployed from here)
 certs/                            trusted CA certificates (*.pem, *.crt) -> trust-manager -> every namespace
 k8s/values/                       Helm values of every chart (no secrets)
 k8s/alloy/                        Alloy pipeline (config.alloy) and the OTLP/JSON import script
-k8s/argocd/                       Argo CD resource health check (Lua), login page styles
 k8s/demo/                         demo app manifests
 apps/demo/                        Spring Boot demo app
 inventories/example/              template for a real site (all site settings)
@@ -156,7 +157,7 @@ artifact:
 * **Alloy** is only published to the HTTPS repository `https://grafana.github.io/helm-charts`.
 * **Mimir** comes from the NGDATA fork and is packaged from Git; the file records the commit.
 
-Versions are in `ansible/group_vars/all.yml` (`charts`).
+Versions are in `settings.yaml` (`charts`), which Ansible and Argo CD both read.
 
 ## A real site
 
@@ -179,8 +180,9 @@ Keep secrets in ansible-vault. Then run `download.yml`, `publish.yml`, `site.yml
 Requirements on the servers:
 * Ubuntu 26.04.
 * An admin user with sudo.
-* Unpartitioned data disks for Garage. **Every unpartitioned whole disk is wiped on every `site.yml` run.**
-  Remove the reset steps from `ansible/roles/garage/tasks/main.yml` once the cluster holds real data.
+* Unpartitioned data disks for Garage: every whole disk without partitions, except the TopoLVM disk. Empty ones
+  are formatted. One that holds a filesystem other than a Garage disk is refused (see
+  [Re-running](#re-running)); `-e force_disk_format=true` erases it.
 
 ## Deployment: Ansible bootstraps, Argo CD deploys
 
@@ -191,14 +193,18 @@ Requirements on the servers:
 2. **Publishes** (lab, `gitops.publish`): pushes the committed `HEAD` to Gitea. At a company, CI does this. The
    charts are already in the Helm repository (`publish.yml`).
    **Argo CD deploys what is committed**, and the playbook warns about uncommitted changes.
-3. Installs **Argo CD** with Helm (the only Helm install).
-4. Creates the root Application `lgtm`. It renders `argocd/root` with the site values from the inventory into one
-   Application per component. Each one combines an upstream chart from the Helm repo with its values file from Git
-   (`k8s/values/<name>.yaml`) and a site overlay. Sync waves order them:
+3. Installs **Argo CD** with Helm, but only the first time. From then on Argo CD manages itself from Git
+   (app `argocd`).
+4. Creates the root Application `lgtm` with the **site's settings** from the inventory: plain data such as the
+   domain, IPs, tenants and IdP (`ansible/templates/site-values.yaml.j2`). Argo CD renders `argocd/root` from Git
+   with `settings.yaml` and these settings into one Application per component. Each one combines an upstream
+   chart from the Helm repo with its values file from Git (`k8s/values/<name>.yaml`) and the site-specific values
+   that the root chart's templates compute (`argocd/root/templates/_values.tpl`: Grafana incl. OAuth and
+   datasources, Argo CD incl. OIDC and RBAC, platform, CA bundle, cert-manager). Sync waves order them:
 
    | Wave | Apps |
    |---|---|
-   | −3 | cert-manager, CloudNativePG + its Barman Cloud plugin (CRDs) |
+   | −3 | Argo CD itself, cert-manager, CloudNativePG + its Barman Cloud plugin (CRDs) |
    | −2 | trust-manager, TopoLVM; `argocd/platform`: ingress VIP Service, Garage endpoints, ingresses (one certificate each), ClusterIssuer, PostgreSQL cluster + backups, PG Back Web |
    | −1 | `certs`: the CA bundle from `certs/` |
    | 0 | Loki, Mimir, Tempo, Pyroscope, kube-state-metrics |
@@ -206,7 +212,7 @@ Requirements on the servers:
    | 2 | demo |
 
    Applications sync automatically with prune and self-heal. Argo CD's health check for `Application`
-   (`k8s/values/argocd.yaml`) lets each wave wait for the previous one.
+   (`argocd/root/files/application-health.lua`) lets each wave wait for the previous one.
 5. Waits until every Application is synced and healthy, except apps marked `wait: false` (the demo: its image
    arrives with `demo.yml` afterwards). It first prints which apps it waits for and which not, then the
    sync/health state of every app (with Argo CD's message for those that aren't `Synced/Healthy`). After 30
@@ -216,8 +222,15 @@ Requirements on the servers:
    ```
    Then it creates the Grafana org per tenant through the API, connects every org to its directory of
    Grafana's Git repository (Git Sync), and sets up PG Back Web (login, database, S3 destination, daily backup).
+   A tenant org that is new gets its id passed to the root app, and Grafana provisions its datasources.
 
-To change something, edit, commit and run `lgtm.yml` again, or just push when Argo CD reads your Git server.
+**What needs what:**
+* A change **in Git** (`k8s/values/`, `argocd/`, `settings.yaml`, `k8s/alloy/`, ...) is rendered and rolled out by
+  Argo CD on its own once it is in the Git server it reads. In the lab, `lgtm.yml` pushes the committed `HEAD`
+  there (`gitops.publish`); at a company, CI or a merge does.
+* A change **in the inventory** (domain, tenants, IdP, ...) needs `lgtm.yml`, which updates the root app.
+* A **new chart version or image** in `settings.yaml` also needs `download.yml` and `publish.yml` first: the
+  cluster only pulls from the artifact repository.
 Clusters set up by earlier versions with plain Helm migrate in place: the Helm release records are deleted and
 Argo CD adopts the resources.
 
@@ -228,10 +241,20 @@ All playbooks can be re-run, and a re-run applies new settings:
   Argo CD prunes everything else; for example, a hostname removed from `lgtm_hosts` removes its ingresses.
 * `publish.yml` pushes only images and charts the artifact repository doesn't have; a chart version is never
   overwritten.
-* `site.yml`: partial runs `--tags otel-import` (import directories) and `--tags buckets` (new buckets of
-  `garage_buckets`, without the Garage reset).
+* `site.yml` keeps all data. Disks that hold something are never formatted:
+  * Garage keeps its disks (label `garageN`), metadata and buckets. An empty new disk is formatted and mounted
+    as the next `/srv/garage/dataN`, but Garage's layout keeps its old capacity until you change it
+    (`garage layout assign`). A disk with any other filesystem stops the run.
+  * TopoLVM keeps its volume group; a disk with other content stops the run.
+  * **`-e force_disk_format=true` erases:** it rebuilds Garage empty on all data disks (**all S3 data is
+    lost**: logs, metrics, traces, profiles, PostgreSQL backups) and wipes a TopoLVM disk with foreign content.
+  * Partial runs: `--tags otel-import` (import directories) and `--tags buckets` (new buckets of
+    `garage_buckets`).
+* **RKE2 upgrade:** set `rke2_version` (`ansible/group_vars/all.yml`), run `download.yml`, then `site.yml`. The
+  servers are upgraded one at a time: install, restart, and the next one starts only when this node is `Ready`
+  again. etcd, the images and the PersistentVolumes stay. Pods aren't drained first; the HA apps
+  (replication factor 3) ride it out. A configuration change restarts the servers the same way.
 * `demo.yml` pushes the image and restarts the pods only when its digest changed.
-* Exception: `site.yml` **resets Garage** on every run.
 
 ## Artifact repository (Nexus)
 
@@ -427,8 +450,9 @@ Loki, Mimir, Tempo and Pyroscope are **multi-tenant**: every write and every que
   `otelcol.auth.headers`). Data without the header is rejected.
 * **Profiles:** Alloy routes them by the `tenant` label, because `pyroscope.receive_http` doesn't forward headers.
   A new tenant needs its pair of `pyroscope.relabel` and `pyroscope.write` in `k8s/values/alloy.yaml`.
-* **Grafana:** every tenant has an **organization** whose datasources only see that tenant. They're created via the
-  API from `ansible/templates/grafana-datasources.yaml.j2`; their dashboards come from Git (below). The
+* **Grafana:** every tenant has an **organization** whose datasources only see that tenant. `lgtm.yml` creates
+  the org through the API; Grafana provisions its datasources (`argocd/root/templates/_datasources.tpl`); its
+  dashboards come from Git (below). The
   **Main org** is for admins and sees all tenants (`demo|platform`). Pyroscope has no cross-tenant queries, so it
   gets one datasource per tenant.
 
@@ -471,19 +495,27 @@ Both log in through the IdP with OIDC (PKCE), each with **its own OAuth client**
 `admin-user`, `alice` (demo), `bob` (platform); passwords in `.secrets/keycloak_user_<name>`).
 `lab/external.yml` keeps an existing realm in step with `lab/templates/keycloak-realm.json.j2`.
 
-| IdP group | Grafana | Argo CD |
-|---|---|---|
-| `grafana-admins` | Grafana server admin, Admin in every org | - |
-| `tenant-<name>` | Editor in org `<name>` | - |
-| `argocd-admins` | - | `role:admin` (`oauth.argocd_admin_groups`) |
+Access follows the user's **roles**, not groups. The IdP puts them into a top-level claim, `roles`
+(`oauth.roles_claim`), in the ID token and in userinfo. Argo CD can't read nested claims such as Keycloak's
+default `realm_access.roles`, so the lab realm adds a "User Realm Role" mapper to both clients. The role names
+are set in `oauth.roles`:
 
-Users outside these groups get nothing in Argo CD. `auto_assign_org` is off, so tenant users never see the Main
-org, which shows all tenants.
+| IdP role | Grafana | Argo CD |
+|---|---|---|
+| `monitoring-grafana-admin` | Grafana server admin, Admin in every org | - |
+| `monitoring-tenant-<name>` | Editor in org `<name>` | - |
+| `monitoring-argocd-admin` | - | `role:admin` |
+| (`oauth.roles.argocd_readonly`) | - | `role:readonly` |
+
+Users without these roles get nothing in Argo CD, and in Grafana they can log in but belong to no org.
+`auto_assign_org` is off, so tenant users never see the Main org, which shows all tenants. In the lab realm the
+users have realm roles (`keycloak_users[].roles`); `lab/external.yml` adds missing roles, sets each user's roles
+to exactly that list, and removes the groups used earlier.
 
 **SSO first, local admin as the safety valve:**
 * Grafana sends everyone straight to the IdP (`auto_login`). The local login form is still at
   `https://grafana.<domain>/login?disableAutoLogin=true`.
-* Argo CD has no automatic redirect. Its login page (`k8s/argocd/login.css`) shows a large "Log in via Keycloak"
+* Argo CD has no automatic redirect. Its login page (`argocd/root/files/login.css`) shows a large "Log in via Keycloak"
   button. Below it, labelled "local admin, only if SSO is down", the username/password form is dimmed until it is
   used.
 

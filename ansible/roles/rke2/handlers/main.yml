@@ -1,7 +1,7 @@
-# Config changes on an existing server; a freshly installed one just started with the new config.
+# A changed version or configuration on an existing server. A fresh install just started with both.
 - name: Restart RKE2
   ansible.builtin.systemd_service: { name: rke2-server, state: restarted }
-  when: not (rke2_install.changed | default(false))
+  when: rke2_installed.rc == 0
 
 - name: Apply netplan
   ansible.builtin.command: netplan apply

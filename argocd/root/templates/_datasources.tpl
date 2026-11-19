@@ -1,12 +1,16 @@
-{#- Grafana datasources for one organization, as a YAML list.
-    ds_tenants: tenants the org may see (header "a|b" = cross-tenant query)
-    ds_dollar:  "$$" for provisioning files (Grafana expands $VAR there), "$" for the HTTP API
-    Cross-links: metric exemplar -> trace · trace -> logs / metrics / CPU profile of the span · log -> trace
--#}
-{% set tenant_header = ds_tenants | join('|') %}
-{% set d = ds_dollar %}
+{{- /*
+Grafana datasources of one organization, as a YAML list (provisioning file: Grafana expands $VAR there, so a
+literal $ is written $$).
+  orgId:   the Grafana organization
+  tenants: tenants the org may see (header "a|b" = cross-tenant query)
+Cross-links: metric exemplar -> trace · trace -> logs / metrics / CPU profile of the span · log -> trace
+*/ -}}
+{{- define "lgtm.datasources" -}}
+{{- $org := .orgId -}}
+{{- $header := join "|" .tenants -}}
 - name: Mimir
   uid: mimir
+  orgId: {{ $org }}
   type: prometheus
   access: proxy
   url: http://mimir-monolithic.lgtm.svc:8080/prometheus
@@ -20,10 +24,11 @@
     exemplarTraceIdDestinations:
       - { name: trace_id, datasourceUid: tempo, urlDisplayLabel: View trace }
   secureJsonData:
-    httpHeaderValue1: "{{ tenant_header }}"
+    httpHeaderValue1: {{ $header | quote }}
 
 - name: Loki
   uid: loki
+  orgId: {{ $org }}
   type: loki
   access: proxy
   url: http://loki.lgtm.svc:3100
@@ -34,14 +39,15 @@
       - name: trace_id
         matcherType: label
         matcherRegex: trace_id
-        url: "{{ d }}{__value.raw}"
+        url: "$${__value.raw}"
         datasourceUid: tempo
         urlDisplayLabel: View trace
   secureJsonData:
-    httpHeaderValue1: "{{ tenant_header }}"
+    httpHeaderValue1: {{ $header | quote }}
 
 - name: Tempo
   uid: tempo
+  orgId: {{ $org }}
   type: tempo
   access: proxy
   url: http://tempo.lgtm.svc:3200
@@ -68,28 +74,31 @@
       tags: [{ key: service.name, value: service }]
       queries:
         - name: Request rate
-          query: sum by (span_name) (rate(traces_spanmetrics_calls_total{{ '{' }}{{ d }}__tags}[5m]))
+          query: sum by (span_name) (rate(traces_spanmetrics_calls_total{$$__tags}[5m]))
         - name: Error rate
-          query: sum by (span_name) (rate(traces_spanmetrics_calls_total{{ '{' }}{{ d }}__tags, status_code="STATUS_CODE_ERROR"}[5m]))
+          query: sum by (span_name) (rate(traces_spanmetrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[5m]))
         - name: p95 latency
-          query: histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket{{ '{' }}{{ d }}__tags}[5m])))
+          query: histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket{$$__tags}[5m])))
     # span -> CPU flame graph of exactly that span (span_id labels from the Pyroscope OTel extension)
     tracesToProfiles:
       datasourceUid: pyroscope
       profileTypeId: "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
       tags: [{ key: service.name, value: service_name }]
   secureJsonData:
-    httpHeaderValue1: "{{ tenant_header }}"
+    httpHeaderValue1: {{ $header | quote }}
+{{- /* Pyroscope has no cross-tenant queries: one datasource per tenant; "pyroscope" is the first tenant's. */}}
+{{- $multi := gt (len .tenants) 1 }}
+{{- range $i, $t := .tenants }}
 
-{# Pyroscope has no cross-tenant queries: one datasource per tenant; "pyroscope" is the first tenant's. #}
-{% for t in ds_tenants %}
-- name: Pyroscope{{ (' (' ~ t ~ ')') if ds_tenants | length > 1 else '' }}
-  uid: {{ 'pyroscope' if loop.first else 'pyroscope-' ~ t }}
+- name: Pyroscope{{ if $multi }} ({{ $t }}){{ end }}
+  uid: {{ if eq $i 0 }}pyroscope{{ else }}pyroscope-{{ $t }}{{ end }}
+  orgId: {{ $org }}
   type: grafana-pyroscope-datasource
   access: proxy
   url: http://pyroscope.lgtm.svc:4040
   jsonData:
     httpHeaderName1: X-Scope-OrgID
   secureJsonData:
-    httpHeaderValue1: "{{ t }}"
-{% endfor %}
+    httpHeaderValue1: {{ $t | quote }}
+{{- end }}
+{{- end }}

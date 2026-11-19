@@ -1,11 +1,13 @@
 # Data disks are found dynamically: every whole disk without partitions or holders (the root disk has
-# partitions), except the TopoLVM disk (topolvm_disk), sorted by name and numbered 1..N -> label garageN ->
-# /srv/garage/dataN. Garage's capacity per disk is 90% of its size.
+# partitions), except the TopoLVM disk (topolvm_disk), sorted by name. Each gets the filesystem label garageN and
+# is mounted at /srv/garage/dataN. Garage's capacity per disk is 90% of its size.
 # Disks that report a size of 0 bytes (failed or missing media) are skipped, so a dead drive doesn't stop
 # the node from coming up; Garage's replication covers the missing capacity.
 #
-# Each run REBUILDS Garage from scratch: stop, unmount, wipe metadata, force-format all data disks.
-# All S3 data is erased (accepted for this lab); the cluster tasks below then re-form the cluster.
+# Normal run: Garage and its data stay. Disks labelled garageN keep their number, empty disks are formatted
+# and get the next free numbers, a disk with anything else on it is refused.
+# force_disk_format=true: Garage is REBUILT - stop, unmount, wipe the metadata, format every data disk
+# (all S3 data is erased); the cluster tasks then form a new cluster.
 - name: Find data disks
   ansible.builtin.set_fact:
     garage_disks: >-
@@ -17,15 +19,6 @@
          | rejectattr('value.size', 'equalto', '0.00 Bytes')
          | rejectattr('value.sectors', 'in', ['0', 0])
          | map(attribute='key') | sort }}
-
-- name: Capacity per data disk in MB (90% of the disk)
-  ansible.builtin.set_fact:
-    garage_disk_mb: >-
-      {%- set mb = [] -%}
-      {%- for d in garage_disks -%}
-      {%-   set dev = ansible_facts.devices[d] -%}
-      {%-   set _ = mb.append((dev.sectors | int * dev.sectorsize | int * 0.9 / 1048576) | int) -%}
-      {%- endfor -%}{{ mb }}
 
 - name: Expect at least one data disk
   ansible.builtin.assert:
@@ -42,63 +35,120 @@
          | selectattr('value.size', 'equalto', '0.00 Bytes') | map(attribute='key') | sort }}
   when: zero_disks | length > 0
 
+- name: Filesystems on the data disks
+  ansible.builtin.command:
+    argv: "{{ ['lsblk', '-J', '-d', '-o', 'NAME,FSTYPE,LABEL'] + garage_devs }}"
+  vars:
+    garage_devs: "{{ garage_disks | map('regex_replace', '^', '/dev/') | list }}"
+  register: garage_lsblk
+  changed_when: false
+
+# garage_data: [{dev, n, mb}] - n is the number of /srv/garage/data<n> and of the label garage<n>.
+# garage_foreign: disks with a filesystem that isn't a Garage disk.
+- name: Number the data disks
+  ansible.builtin.set_fact:
+    garage_foreign: >-
+      {%- set out = [] -%}
+      {%- for d in disks if d.fstype and not (d.label or '') is match('^garage[0-9]+$') -%}
+      {%-   set _ = out.append(d.name) -%}
+      {%- endfor -%}{{ out }}
+    garage_data: >-
+      {%- set reset = force_disk_format | bool -%}
+      {%- set data = [] -%}
+      {%- set used = [] -%}
+      {%- for d in disks if not reset and (d.label or '') is match('^garage[0-9]+$') -%}
+      {%-   set _ = data.append({'dev': d.name, 'n': d.label[6:] | int}) -%}
+      {%-   set _ = used.append(d.label[6:] | int) -%}
+      {%- endfor -%}
+      {%- set n = namespace(next=1) -%}
+      {%- for d in disks if reset or not d.fstype -%}
+      {%-   for _ in range(disks | length + 1) if n.next in used -%}{%- set n.next = n.next + 1 -%}{%- endfor -%}
+      {%-   set _ = data.append({'dev': d.name, 'n': n.next}) -%}
+      {%-   set _ = used.append(n.next) -%}
+      {%- endfor -%}
+      {%- for d in data -%}
+      {%-   set dev = ansible_facts.devices[d.dev] -%}
+      {%-   set _ = d.update({'mb': (dev.sectors | int * dev.sectorsize | int * 0.9 / 1048576) | int}) -%}
+      {%- endfor -%}{{ data | sort(attribute='n') }}
+  vars:
+    disks: "{{ (garage_lsblk.stdout | from_json).blockdevices }}"
+
+- name: Refuse data disks that hold something else (without force_disk_format)
+  ansible.builtin.assert:
+    that: garage_foreign | length == 0 or force_disk_format | bool
+    fail_msg: >-
+      {{ garage_foreign | join(', ') }} on {{ inventory_hostname }} hold(s) a filesystem that isn't a Garage disk.
+      To rebuild Garage on all data disks: ansible-playbook ... site.yml -e force_disk_format=true
+      (ERASES all S3 data)
+    success_msg: "Garage disks: {{ garage_data | map(attribute='dev') | join(', ') }}"
+
 - name: Installed services
   ansible.builtin.service_facts:
 
-- name: Stop garage (if installed)
-  ansible.builtin.systemd_service: { name: garage, state: stopped }
-  when: "'garage.service' in ansible_facts.services"
+- name: Rebuild Garage from scratch (force_disk_format)
+  when: force_disk_format | bool
+  block:
+    - name: Stop garage (if installed)
+      ansible.builtin.systemd_service: { name: garage, state: stopped }
+      when: "'garage.service' in ansible_facts.services"
 
-- name: Unmount all Garage data directories
-  ansible.builtin.shell: |
-    set -o pipefail
-    for m in $(findmnt -rn -o TARGET | grep '^/srv/garage/data' || true); do umount "$m"; done
-    sed -i '/^LABEL=garage[0-9]* /d' /etc/fstab
-  args: { executable: /bin/bash }
-  changed_when: true
+    - name: Unmount all Garage data directories
+      ansible.builtin.shell: |
+        set -o pipefail
+        for m in $(findmnt -rn -o TARGET | grep '^/srv/garage/data' || true); do umount "$m"; done
+        sed -i '/^LABEL=garage[0-9]* /d' /etc/fstab
+      args: { executable: /bin/bash }
+      changed_when: true
 
-- name: Wipe Garage metadata (node identity, layout, buckets)
-  ansible.builtin.file: { path: /var/lib/garage, state: absent }
+    - name: Wipe Garage metadata (node identity, layout, buckets)
+      ansible.builtin.file: { path: /var/lib/garage, state: absent }
 
+# Without force: only disks without a filesystem are formatted (the module never touches an existing one)
 - name: Format data disks
   community.general.filesystem:
-    dev: "/dev/{{ item }}"
+    dev: "/dev/{{ item.dev }}"
     fstype: ext4
-    force: true
-    opts: "-L garage{{ idx + 1 }} -m 0"
-  loop: "{{ garage_disks }}"
-  loop_control: { index_var: idx }
+    force: "{{ force_disk_format | bool }}"
+    opts: "-L garage{{ item.n }} -m 0"
+  loop: "{{ garage_data }}"
+  loop_control: { label: "{{ item.dev }} -> garage{{ item.n }}" }
 
 - name: Mount data disks
   ansible.posix.mount:
-    path: "/srv/garage/data{{ idx + 1 }}"
-    src: "LABEL=garage{{ idx + 1 }}"
+    path: "/srv/garage/data{{ item.n }}"
+    src: "LABEL=garage{{ item.n }}"
     fstype: ext4
     opts: defaults,noatime
     state: mounted
-  loop: "{{ garage_disks }}"
-  loop_control: { index_var: idx }
+  loop: "{{ garage_data }}"
+  loop_control: { label: "{{ item.dev }} -> /srv/garage/data{{ item.n }}" }
 
 - name: Install garage binary
   ansible.builtin.copy:
     src: "{{ artifacts_dir }}/bin/garage"
     dest: /usr/local/bin/garage
     mode: "0755"
-
+  register: garage_binary
 
 - name: Create metadata directory
   ansible.builtin.file: { path: /var/lib/garage/meta, state: directory, mode: "0700" }
 
 - name: Configure garage
   ansible.builtin.template: { src: garage.toml.j2, dest: /etc/garage.toml, mode: "0600" }
-
+  register: garage_config
 
 - name: Install systemd unit
   ansible.builtin.template: { src: garage.service.j2, dest: /etc/systemd/system/garage.service, mode: "0644" }
+  register: garage_unit
 
-
+# Restarted only when something changed: one node at a time is fine for Garage (replication factor 3)
 - name: Start garage
-  ansible.builtin.systemd_service: { name: garage, enabled: true, state: restarted, daemon_reload: true }
+  ansible.builtin.systemd_service:
+    name: garage
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if garage_binary is changed or garage_config is changed or garage_unit is changed
+              else 'started' }}"
 
 - name: Read this node's Garage id
   ansible.builtin.command: garage -c /etc/garage.toml node id -q

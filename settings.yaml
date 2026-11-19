@@ -1,0 +1,58 @@
+# Settings shared by Ansible (download.yml, publish.yml, site.yml, lgtm.yml) and Argo CD (the root app reads this
+# file from Git): chart versions, images, constants. Site-specific settings live in the inventory.
+# A change here is deployed by Argo CD once it is in Git. New charts or images: download.yml and publish.yml first
+# (the cluster pulls only from the artifact repository).
+
+# Helm charts, pulled by download.yml into artifacts/charts. "oci" is the OCI reference (preferred, listed in
+# artifacts/helm-charts-oci.txt); "repo" is a classic HTTPS repository for charts without OCI publication.
+charts:
+  loki: { oci: oci://ghcr.io/grafana-community/helm-charts/loki, version: 19.0.3 }        # Loki 3.7.9
+  tempo: { oci: oci://ghcr.io/grafana-community/helm-charts/tempo, version: 3.2.1 }       # Tempo 3.1.1
+  grafana: { oci: oci://ghcr.io/grafana-community/helm-charts/grafana, version: 14.0.1 }  # Grafana 13.2.4
+  pyroscope: { oci: oci://ghcr.io/grafana/helm-charts/pyroscope, version: 2.4.1 }         # Pyroscope 2.4.1
+  # Alloy's chart is only released to the HTTPS repository (no OCI artifact as of 1.14.2)
+  alloy: { repo: https://grafana.github.io/helm-charts, version: 1.14.2 }                 # Alloy 1.21.1
+  cert-manager: { oci: oci://quay.io/jetstack/charts/cert-manager, version: v1.21.2 }
+  trust-manager: { oci: oci://quay.io/jetstack/charts/trust-manager, version: v0.26.0 }
+  cloudnative-pg: { oci: oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg, version: 0.29.1 }  # operator 1.30.1
+  plugin-barman-cloud:                                                                    # plugin 0.15.1
+    oci: oci://ghcr.io/cloudnative-pg/charts/plugin-barman-cloud
+    version: 0.8.1
+  argo-cd: { oci: oci://ghcr.io/argoproj/argo-helm/argo-cd, version: 10.10.5 }           # Argo CD 3.5.5
+  # TopoLVM and Headlamp publish their charts to HTTPS repositories only (no OCI artifact)
+  topolvm: { repo: https://topolvm.github.io/topolvm, version: 17.3.0 }                   # TopoLVM 0.42.0
+  headlamp: { repo: https://kubernetes-sigs.github.io/headlamp/, version: 0.46.0 }        # Headlamp 0.46.0
+  kube-state-metrics:                                                                     # 2.20.0
+    oci: oci://ghcr.io/prometheus-community/charts/kube-state-metrics
+    version: 8.6.0
+# Mimir monolithic chart from the NGDATA fork (branch release-6.0.6-1-lily), pinned; packaged by download.yml.
+mimir_chart:
+  repo: https://github.com/NGDATA/mimir.git
+  commit: d089f535d717c7f8a7e06dc70f84bb27017b4373
+  version: 6.0.6
+
+# Grafana image with the Drilldown apps and trace-pong baked in (no plugin downloads at runtime). Change the tag
+# when the plugins change: the nodes keep an image they already have (imagePullPolicy IfNotPresent).
+grafana_base_image: grafana/grafana:13.2.4
+grafana_image: lgtm.local/grafana:13.2.4-plugins.2
+grafana_plugins:                # from grafana.com, or from "url" for plugins published elsewhere
+  - { id: grafana-metricsdrilldown-app, version: 3.0.0 }
+  - { id: grafana-lokiexplore-app, version: 3.0.0 }
+  - { id: grafana-exploretraces-app, version: 3.0.0 }
+  - { id: grafana-pyroscope-app, version: 3.0.0 }
+  # trace-pong: live service traffic from Tempo traces on the service graph (WebGPU). Unsigned: allowed by id in
+  # k8s/values/grafana.yaml (plugins.allow_loading_unsigned_plugins).
+  - id: tracepong-live-panel
+    version: 1.3.0
+    url: https://github.com/ndgynxjnsn-alt/trace-pong/releases/download/first-release/tracepong-live-panel-1.3.0.zip
+
+# PostgreSQL for Grafana (CloudNativePG cluster "grafana-db", 3 instances)
+grafana_db_image: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+# PG Back Web: web UI for pg_dump backups of Grafana's database to S3 and restores (https://pgbackweb.<domain>)
+pgbackweb_image: docker.io/eduardolat/pgbackweb:0.5.2
+
+# In-cluster S3 endpoint: Service "garage" whose endpoints are the Garage daemons on the nodes.
+s3_endpoint: garage.lgtm.svc:3900
+
+# Pods behind the ingress VIP: RKE2's bundled Traefik.
+traefik_selector: { app.kubernetes.io/name: rke2-traefik }

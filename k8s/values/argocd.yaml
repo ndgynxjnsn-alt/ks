@@ -1,5 +1,6 @@
-# Argo CD: installed once by ansible/lgtm.yml (Helm), then manages everything else from Git
-# (app of apps: argocd/root). UI at argocd.<domain> via Traefik, so the server runs without TLS itself.
+# Argo CD: installed once by ansible/lgtm.yml (Helm), then manages everything from Git (app of apps:
+# argocd/root), itself included (app "argocd": these values + OIDC, RBAC, login page from the root app).
+# UI at argocd.<domain> via Traefik, so the server runs without TLS itself.
 fullnameOverride: argocd
 dex: { enabled: false }
 notifications: { enabled: false }
@@ -8,7 +9,7 @@ configs:
     server.insecure: true
   cm:
     timeout.reconciliation: 60s
-    # resource.customizations.health.argoproj.io_Application: k8s/argocd/application-health.lua (--set-file)
+    # resource.customizations.health.argoproj.io_Application: argocd/root/files/application-health.lua
 controller:
   resources:
     requests: { cpu: 100m, memory: 256Mi }

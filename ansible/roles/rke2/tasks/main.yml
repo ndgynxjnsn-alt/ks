@@ -52,13 +52,24 @@
           | map('regex_replace', '/.*$', '') | list + ['lgtm.local']) | unique | sort }}
   notify: Restart RKE2
 
+- name: Installed RKE2 version
+  ansible.builtin.command: /usr/local/bin/rke2 --version
+  register: rke2_installed
+  changed_when: false
+  failed_when: false
+
+# First install, or an upgrade/downgrade to rke2_version: the running server is restarted (handler), and
+# site.yml handles the servers one after another, each Ready before the next (rolling upgrade). Data stays:
+# etcd, containerd's images and the PersistentVolumes are untouched.
 - name: Install RKE2 from the tarball
   ansible.builtin.command: sh /root/rke2-artifacts/install.sh
   environment:
     INSTALL_RKE2_ARTIFACT_PATH: /root/rke2-artifacts
     INSTALL_RKE2_VERSION: "{{ rke2_version }}"
-  args: { creates: /usr/local/bin/rke2 }
+  when: rke2_installed.rc != 0 or rke2_version not in rke2_installed.stdout
   register: rke2_install
+  changed_when: true
+  notify: Restart RKE2
 
 - name: Configure RKE2
   ansible.builtin.template: { src: config.yaml.j2, dest: /etc/rancher/rke2/config.yaml, mode: "0600" }
@@ -78,12 +89,25 @@
 - name: Start RKE2 server
   ansible.builtin.systemd_service: { name: rke2-server, enabled: true, state: started }
 
+- name: Restart now if the version or the configuration changed
+  ansible.builtin.meta: flush_handlers
+
 - name: Wait until the cluster answers on the VIP (kube-vip)
   ansible.builtin.uri: { url: "https://{{ vip }}:9345/ping", validate_certs: false, return_content: true }
   register: rke2_ping
   until: rke2_ping.status == 200
   retries: 60
   delay: 5
+
+- name: Wait until this node is Ready again (before site.yml moves on to the next server)
+  ansible.builtin.command: >-
+    /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml
+    wait --for=condition=Ready node/{{ ansible_hostname }} --timeout=10m
+  changed_when: false
+  retries: 10
+  delay: 15
+  register: rke2_node_ready
+  until: rke2_node_ready.rc == 0
 
 - name: Shell environment for kubectl/crictl on the node
   ansible.builtin.template: { src: rke2-profile.sh.j2, dest: /etc/profile.d/rke2.sh, mode: "0644" }

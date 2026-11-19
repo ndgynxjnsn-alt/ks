@@ -4,12 +4,13 @@
   "displayName": "LGTM observability",
   "sslRequired": "none",
   "registrationAllowed": false,
-  "groups": [
-    { "name": "grafana-admins" },
-    { "name": "argocd-admins" }{% for t in tenants %},
-    { "name": "tenant-{{ t.name }}" }{% endfor %}
-
-  ],
+  "roles": {
+    "realm": [
+{% for r in keycloak_realm_roles %}
+      { "name": "{{ r }}" }{{ '' if loop.last else ',' }}
+{% endfor %}
+    ]
+  },
   "clients": [
     {
       "clientId": "{{ oauth.client_id }}",
@@ -33,12 +34,13 @@
       },
       "protocolMappers": [
         {
-          "name": "groups",
+          "name": "roles",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-group-membership-mapper",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
           "config": {
-            "claim.name": "groups",
-            "full.path": "false",
+            "claim.name": "{{ oauth.roles_claim }}",
+            "multivalued": "true",
+            "jsonType.label": "String",
             "id.token.claim": "true",
             "access.token.claim": "true",
             "userinfo.token.claim": "true"
@@ -65,12 +67,13 @@
       },
       "protocolMappers": [
         {
-          "name": "groups",
+          "name": "roles",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-group-membership-mapper",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
           "config": {
-            "claim.name": "groups",
-            "full.path": "false",
+            "claim.name": "{{ oauth.roles_claim }}",
+            "multivalued": "true",
+            "jsonType.label": "String",
             "id.token.claim": "true",
             "access.token.claim": "true",
             "userinfo.token.claim": "true"
@@ -88,7 +91,7 @@
       "firstName": "{{ u.name | capitalize }}",
       "lastName": "Lab",
       "enabled": true,
-      "groups": {{ u.groups | to_json }},
+      "realmRoles": {{ u.roles | to_json }},
       "credentials": [
         { "type": "password", "temporary": false,
           "value": "{{ lookup('password', secrets_dir + '/keycloak_user_' + u.name + ' chars=ascii_letters,digits length=16') }}" }

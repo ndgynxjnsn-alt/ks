@@ -13,7 +13,7 @@
 - name: Assign initial layout (one zone)
   ansible.builtin.command: >-
     garage -c /etc/garage.toml layout assign {{ hostvars[item].garage_node_id.stdout.split('@')[0] }}
-    -z dc1 -c {{ hostvars[item].garage_disk_mb | sum }}M -t {{ item }}
+    -z dc1 -c {{ hostvars[item].garage_data | map(attribute='mb') | sum }}M -t {{ item }}
   loop: "{{ ansible_play_hosts }}"
   when: "'No nodes currently have a role' in garage_layout.stdout"
   changed_when: true

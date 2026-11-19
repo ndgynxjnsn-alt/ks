@@ -1,6 +1,7 @@
 # {{ ansible_managed }}
-# The root of the app of apps: Argo CD renders argocd/root from Git with these site values (from the
-# inventory) into one Application per component.
+# The root of the app of apps: Argo CD renders argocd/root from Git, with settings.yaml from Git and the site's
+# settings from the inventory (site_values, ansible/templates/site-values.yaml.j2), into one Application per
+# component. Changes in Git need no Ansible run; changes in the inventory need ansible/lgtm.yml.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -10,12 +11,16 @@ metadata:
 spec:
   project: default
   destination: { server: https://kubernetes.default.svc, namespace: argocd }
-  source:
-    repoURL: {{ gitops.repo_url }}
-    targetRevision: {{ gitops.revision }}
-    path: argocd/root
-    helm:
-      valuesObject: {{ root_values | to_json }}
+  sources:
+    - repoURL: {{ gitops.repo_url }}
+      targetRevision: {{ gitops.revision }}
+      path: argocd/root
+      helm:
+        valueFiles: [$repo/settings.yaml]
+        valuesObject: {{ {'site': site_values} | to_json }}
+    - repoURL: {{ gitops.repo_url }}
+      targetRevision: {{ gitops.revision }}
+      ref: repo
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     retry:

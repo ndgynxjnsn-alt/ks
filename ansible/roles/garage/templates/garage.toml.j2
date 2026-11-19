@@ -2,8 +2,8 @@
 replication_factor = 3
 metadata_dir = "/var/lib/garage/meta"
 data_dir = [
-{% for d in garage_disks %}
-  { path = "/srv/garage/data{{ loop.index }}", capacity = "{{ garage_disk_mb[loop.index0] }}M" },
+{% for d in garage_data %}
+  { path = "/srv/garage/data{{ d.n }}", capacity = "{{ d.mb }}M" },
 {% endfor %}
 ]
 db_engine = "lmdb"
