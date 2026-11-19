@@ -85,7 +85,7 @@ mimir:
     alertmanager_storage:
       s3: { bucket_name: mimir-alertmanager }
     limits:
-      compactor_blocks_retention_period: 7d
+      # compactor_blocks_retention_period: the site's retention_days (inventory), set by the root app
       max_global_exemplars_per_user: 100000
       native_histograms_ingestion_enabled: true
       otel_metric_suffixes_enabled: true

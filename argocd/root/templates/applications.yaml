@@ -4,7 +4,7 @@
 {{- range $name, $app := .Values.apps }}
 {{- $values := dict }}
 {{- with $app.siteValues }}
-{{- $values = include (printf "lgtm.values.%s" .) $ | fromYaml }}
+{{- $values = include (printf "lgtm.values.%s" .) (merge (dict "app" $name) $) | fromYaml }}
 {{- if hasKey $values "Error" }}{{ fail (printf "apps.%s: %s" $name $values.Error) }}{{ end }}
 {{- end }}
 ---

@@ -57,13 +57,17 @@ apps:
     wave: 0
   loki:
     wave: 0
+    siteValues: retention
   mimir:
     chart: mimir-distributed      # version: settings.yaml mimir_chart (packaged from a fork by download.yml)
     wave: 0
+    siteValues: retention
   tempo:
     wave: 0
+    siteValues: retention
   pyroscope:
     wave: 0
+    siteValues: retention
   alloy:
     wave: 1
     extraPath: k8s/alloy          # Alloy config + import script as files (Kustomize ConfigMap)

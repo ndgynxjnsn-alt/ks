@@ -9,7 +9,7 @@ tempo:
   # tenant's span metrics to Mimir under the same tenant.
   multitenancyEnabled: true
   reportingEnabled: false
-  retention: 168h
+  # retention: the site's retention_days (inventory), set by the root app
   storage:
     trace:
       backend: s3

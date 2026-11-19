@@ -59,6 +59,26 @@ siteCAs: {{ . | toYaml | indent 2 | trim }}
 {{- end }}
 {{- end }}
 
+{{- /* ------------------------------------------------------------------ retention (Loki, Mimir, Tempo, Pyroscope)
+       One setting for all four: site.retentionDays (inventory: retention_days). The compactors delete older
+       data; a change applies from their next run on (shorter: old data goes, longer: kept from now on). */ -}}
+{{- define "lgtm.values.retention" -}}
+{{- $days := int (.Values.site.retentionDays | default 183) -}}   {{- /* 6 months if the site sets nothing */ -}}
+{{- if eq .app "loki" }}
+loki:
+  limits_config:
+    retention_period: {{ printf "%dd" $days }}
+{{- else if eq .app "tempo" }}
+tempo:
+  retention: {{ printf "%dh" (mul $days 24) }}
+{{- else }}
+{{ .app }}:
+  structuredConfig:
+    limits:
+      compactor_blocks_retention_period: {{ printf "%dd" $days }}
+{{- end }}
+{{- end }}
+
 {{- /* ------------------------------------------------------------------ argocd/platform */ -}}
 {{- define "lgtm.values.platform" -}}
 {{- $s := .Values.site -}}

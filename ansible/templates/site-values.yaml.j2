@@ -24,6 +24,8 @@ tls:
 {%   for f in trusted_ca_files %}{% set _ = site_cas.append(lookup('file', f) | trim) %}{% endfor %}
 trustedCAs: {{ site_cas | join('\n') | to_json }}
 {% endif %}
+{# retention_days: inventory; 183 days (6 months) if unset. (Not in ansible/group_vars: those beat the inventory.) #}
+retentionDays: {{ retention_days | default(183) | int }}
 grafanaDB:
   external: {{ grafana_db_external | default(false) | to_json }}
   backupRetention: {{ grafana_db_backup_retention | default('7d') | to_json }}

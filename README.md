@@ -231,8 +231,19 @@ Requirements on the servers:
 * A change **in the inventory** (domain, tenants, IdP, ...) needs `lgtm.yml`, which updates the root app.
 * A **new chart version or image** in `settings.yaml` also needs `download.yml` and `publish.yml` first: the
   cluster only pulls from the artifact repository.
-Clusters set up by earlier versions with plain Helm migrate in place: the Helm release records are deleted and
-Argo CD adopts the resources.
+**Clusters set up before the root chart rendered the site's values** (the root app carried every value
+from Ansible) are converted by running `lgtm.yml` once: it keeps the installed Argo CD, which then takes over its
+own installation (app `argocd`), and replaces the root app with the site settings. Nothing is reinstalled.
+
+### Retention
+
+Loki, Mimir, Tempo and Pyroscope keep data for `retention_days` (inventory; 183 days = 6 months if unset; the
+lab sets 7 because its Garage disks are small). The root app passes it to all four. Changing it on a running
+cluster works with `lgtm.yml`: the compactors apply it from their next run on. A longer retention keeps data
+from then on (data deleted before stays deleted), a shorter one deletes older data.
+
+Size Garage for it: everything ingested during the retention, three times (replication factor 3). When Garage is
+full, writes fail.
 
 ### Re-running
 

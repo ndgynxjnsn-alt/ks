@@ -8,6 +8,11 @@ domain: lgtm.company.org   # DNS: *.lgtm.company.org -> ingress_vip
 lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro, pgbackweb]
 grafana_db_external: true   # Grafana's PostgreSQL on <ingress_vip>:5432 (postgres.<domain>), TLS + password
 
+# ---------------------------------------------------------------- telemetry
+# Loki, Mimir, Tempo and Pyroscope keep data this many days. Size Garage for it: what the site ingests in this
+# time, three times (replication factor 3), spread over the servers' Garage disks.
+retention_days: 183            # 6 months
+
 # ---------------------------------------------------------------- storage
 # topolvm_disk is set per host in hosts.yml (the disks differ between servers); ansible/disks.yml suggests one.
 

@@ -32,7 +32,7 @@ pyroscope:
         insecure: true
         force_path_style: true
     limits:
-      compactor_blocks_retention_period: 7d
+      # compactor_blocks_retention_period: the site's retention_days (inventory), set by the root app
 
 # Alloy is deployed separately (k8s/values/alloy.yaml).
 alloy: { enabled: false }

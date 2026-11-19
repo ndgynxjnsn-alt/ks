@@ -30,7 +30,7 @@ loki:
       s3ForcePathStyle: true
       insecure: true
   limits_config:
-    retention_period: 7d
+    # retention_period: the site's retention_days (inventory), set by the root app
     allow_structured_metadata: true
     volume_enabled: true        # Logs Drilldown
     discover_service_name: [service_name, service, app, application, name, app_kubernetes_io_name, container]

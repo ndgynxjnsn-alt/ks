@@ -13,6 +13,10 @@ domain: lgtm.company.org
 # Hostnames served on the ingress VIP (backends: ansible/templates/ingress.yaml.j2). Remove one to unpublish it.
 lgtm_hosts: [grafana, loki, tempo, mimir, pyroscope, alloy, garage, argocd, headlamp, faro, pgbackweb]
 
+# Telemetry retention (Loki, Mimir, Tempo, Pyroscope) in days. Default without this setting: 183 (6 months).
+# The lab's Garage disks (5 x 1 GB per VM) hold about a week.
+retention_days: 7
+
 # Grafana's PostgreSQL (CloudNativePG) on port 5432 of the ingress VIP, e.g. postgres.<domain>:5432 (TLS, scram).
 grafana_db_external: true
 
